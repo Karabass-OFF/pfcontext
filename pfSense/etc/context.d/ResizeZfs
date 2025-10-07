@@ -1,0 +1,61 @@
+#!/bin/sh
+#
+# Add the following line to /cf/conf/config.xml to enable this service:
+# add in /cf/conf/config.xml section "<system>"  line <earlyshellcmd>/etc/rc.d/context onestart</earlyshellcmd>
+# PROVIDE: context
+# REQUIRE: NETWORK netif routing
+# KEYWORD: shutdown
+#
+
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
+
+. /etc/rc.subr
+
+name="resizezfs"
+desc="OpenNebula: resizezfs script executor"
+rcvar="resizezfs_enable"
+
+start_cmd="resizezfs_start"
+
+load_rc_config $name
+: ${resizezfs_enable:=NO}
+
+extra_commands="status stop"
+
+#LOG="/tmp/context.log"
+LOG="/dev/null" # Uncomment this line to disable logging
+POOL="pfSense"
+
+resizezfs_start() {
+    echo "$(date) [context] === START ResizeZfs $(date) ===" >> "$LOG"
+    DISK=$(gpart show | awk '/GPT/ {print $4; exit}') # Получаем имя диска, на котором находится ZFS-раздел
+    # Проверяем, есть ли повреждение таблицы разделов
+    if gpart show "$DISK" 2>&1 | grep -q 'CORRUPT'; then
+        echo "$(date) [context] Обнаружена поврежденная таблица разделов, выполняется восстановление..." >> "$LOG"
+        gpart recover "$DISK" >> "$LOG" 2>&1
+    fi
+             
+    # Проверяем, достаточно ли свободного места на диске для расширения ZFS-раздела
+    free_sectors=$(gpart show | awk '/free / {s+=$2} END {print s}')
+    if [ "$free_sectors" -le 7128 ]; then
+        echo "$(date) [context] Недостаточно места для расширения ZFS-раздела ($free_sectors секторов)" >> "$LOG"
+    else
+        ZFS_PART_NUM=$(gpart show | awk '/freebsd-zfs/ {print $3}')
+        ZFS_PART=$(gpart show | awk '/freebsd-zfs/ {print $4}')
+        ZFS_DEV="${DISK}p${ZFS_PART_NUM}"
+
+        if [ -n "$cat ZFS_PART_NUM" ]; then
+            #gpart commit "$DISK" >> "$LOG" 2>&1 # Коммитим изменения в таблице разделов
+            gpart recover "$DISK" >> "$LOG" 2>&1 # Восстанавливаем таблицу разделов
+            gpart resize -i "$ZFS_PART_NUM" "$DISK" >> "$LOG" 2>&1 # Расширяем ZFS-раздел
+            zpool online -e "$POOL" "$ZFS_DEV" >> "$LOG" 2>&1 # Расширяем ZFS-пул
+            zpool list "$POOL" >> "$LOG" 2>&1 # Выводим информацию о ZFS-пуле
+            echo "$(date) [context] ZFS-раздел расширен" >> "$LOG" 
+        else
+            echo "$(date) [context] ZFS-раздел не найден на $DISK" >> "$LOG"
+        fi
+    fi
+    
+} # <--- This closing brace was missing
+
+run_rc_command "$1"

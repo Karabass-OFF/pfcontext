@@ -1,0 +1,254 @@
+#!/bin/sh
+#
+# Add the following line to /cf/conf/config.xml to enable this service:
+# add in /cf/conf/config.xml section "<system>"  line <earlyshellcmd>/etc/rc.d/context onestart</earlyshellcmd>
+# PROVIDE: context
+# REQUIRE: NETWORK netif routing
+# KEYWORD: shutdown
+#
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
+
+. /etc/rc.subr
+
+name="context"
+desc="OpenNebula: context script executor"
+rcvar="context_enable"
+
+load_rc_config $name
+: ${context_enable:=NO}
+
+extra_commands="status stop"
+
+#LOG="/tmp/context.log"
+LOG="/dev/null" # Uncomment for debugging
+CONTEXT_MOUNT="/mnt/context"
+PID="/etc/context.d/net.pid"
+CONTEXT_DEV="/dev/cd0"
+CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
+xml_file="/cf/conf/config.xml"
+backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+
+context_start() {
+    echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
+    # Монтируем CD-ROM, если он еще не смонтирован
+    mkdir -p "$CONTEXT_MOUNT"
+    if ! mount | grep -q "$CONTEXT_MOUNT"; then
+        mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1
+    fi 
+
+    # Проверяем наличие файла context.sh на CD-ROM
+    if [ -f "$CONTEXT_FILE" ]; then
+        echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
+        . "$CONTEXT_FILE"
+        cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
+    
+        # Применяем SSH ключ
+        if [ -n "$SSH_PUBLIC_KEY" ]; then
+            mkdir -p /root/.ssh
+            if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+                echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+                chmod 600 /root/.ssh/authorized_keys
+                chmod 700 /root/.ssh
+                echo "$(date) [context] SSH public key updated" >> "$LOG"
+            fi
+        fi
+    else
+      exit 0 # Если файла context.sh нет, выходим без ошибок
+      echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
+    fi
+
+    # Отмонтировать диск после получения всех данных 
+    if mount | grep -q "$CONTEXT_MOUNT"; then
+        umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
+    else
+        echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
+    fi
+
+
+    # Проверяем наличие файла /etc/context.d/net.pid 
+    if [ -f "$PID" ]; then
+      xml ed -L \
+           -d "//interfaces/*" \
+           "$backup_xml_file"  
+        # Получаем список интерфейсов и их MAC-адресов в системе
+        sys_ifaces=$(ifconfig -l)
+        for iface in $sys_ifaces; do
+            sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
+            # Ищем переменную ETHx_MAC, совпадающую с MAC интерфейса
+            for var in $(set | grep -oE '^ETH[0-9]+_MAC'); do
+                ctx_mac=$(eval echo \$$var)
+                if [ "$ctx_mac" = "$sys_mac" ] && [ -n "$ctx_mac" ]; then
+                    idx=$(echo "$var" | grep -oE '[0-9]+')
+                    ip_var="ETH${idx}_IP"
+                    mask_var="ETH${idx}_MASK"
+                    gw_var="ETH${idx}_GATEWAY"
+
+                    ip_addr=$(eval echo \$$ip_var)
+                    mask=$(eval echo \$$mask_var)
+                    gw=$(eval echo \$$gw_var)
+
+                    # Счётчики для LAN и WAN
+                    if [ -z "${lan_count+x}" ]; then lan_count=0; fi
+                    if [ -z "${wan_count+x}" ]; then wan_count=0; fi
+
+                    if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.'; then
+                        lan_count=$((lan_count + 1))
+                        desc="LAN${lan_count}"
+                        network="opt${lan_count}"
+                    else
+                        wan_count=$((wan_count + 1))
+                        desc="WAN${wan_count}"
+                        network="wan${wan_count}"
+                    fi
+
+                    # Расчет префикса из маски через PHP
+                    prefix=$(php -r "echo substr_count(decbin(ip2long('$mask')), '1');") 
+
+                    # Правим название интерфейса для LAN и WAN
+                    if [ "$network" = "opt1" ]; then
+                        network="lan"
+                        desc="LAN" 
+                    fi
+    #
+    #                if echo "$network" | grep -Eq '^opt[2-9][0-9]*$'; then
+    #                    num=$(echo "$network" | grep -oE '[0-9]+')
+    #                    new_num=$((num - 1))
+    #                    network="opt${new_num}"
+    #                    desc="OPT${new_num}"
+    #                fi
+    #
+                    if [ "$network" = "wan1" ]; then
+                        network="wan"
+                        desc="WAN" 
+                    fi
+                    # Применяем адресацию к интерфейсу
+                    if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
+                        ifconfig "$iface" inet "$ip_addr" netmask "$mask" description "$desc"
+                        ifconfig "$iface" ether "$ctx_mac"
+                        echo "$(date) [context] Set $iface: $ip_addr/$mask ($PREF)" >> "$LOG"
+                            xml ed -L \
+                                -s "//interfaces"          -t elem -n "$network"  -v "" \
+                                -s "//interfaces/$network" -t elem -n "descr"     -v "$desc" \
+                                -s "//interfaces/$network" -t elem -n "enable"    -v "YES" \
+                                -s "//interfaces/$network" -t elem -n "ipaddr"    -v "$ip_addr" \
+                                -s "//interfaces/$network" -t elem -n "if"        -v "$iface" \
+                                -s "//interfaces/$network" -t elem -n "spoofmac"  -v "$ctx_mac" \
+                                -s "//interfaces/$network" -t elem -n "subnet"    -v "$prefix" \
+                                "$backup_xml_file"        
+                                                        
+                                # Исправляем <descr><![CDATA[WAN1]]></descr> и <enable/> через sed без создания бэкапов
+                                sed -i '' \
+                                    -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
+                                    -e 's|<enable>YES</enable>|<enable></enable>|g' \
+                                    "$backup_xml_file"
+                        # Применяем шлюз (gateway) только для первого WAN-интерфейса (wan1)
+                        if [ "$network" = "wan" ]; then
+                            route delete default >/dev/null 2>&1
+                            route add default "$gw"
+                            # Удаляем все текущие элементы gateway и вставляем новый
+                            xml ed -L -d "//system/gateway" -s "//system" -t elem -n "gateway" -v "$gw" \
+                                      -s "//interfaces/$network" -t elem -n "gateway"   -v "WANGW" \
+                                      -s "//interfaces/$network" -t elem -n "blockpriv"  -v "" \
+                                      -s "//interfaces/$network" -t elem -n "blockbogons"    -v "" \
+                                      -u "//gateway_item[name='WANGW']/gateway" -v "$gw" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] Set gateway: $gw" >> "$LOG"
+                        fi
+                    fi
+                fi
+            done
+        done
+        rm $PID
+    fi
+
+    all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | while read var; do eval "echo \$$var"; done | xargs)
+    # Применяем DNS
+    if [ -n "$all_dns" ]; then
+        dns1=$(echo "$all_dns" | awk '{print $1}')
+        dns2=$(echo "$all_dns" | awk '{print $NF}')
+        echo -n > /etc/resolv.conf
+        [ -n "$dns1" ] && echo "nameserver $dns1" >> /etc/resolv.conf
+        [ -n "$dns2" ] && echo "nameserver $dns2" >> /etc/resolv.conf
+
+        # Обновляем DNS в backup_xml_file через xml ed
+        xml ed -L \
+            -u "//system/dnsserver[1]" -v "$dns1" \
+            -u "//system/dnsserver[2]" -v "$dns2" \
+            -u "//system/dnsallowoverride" -v "" \
+            "$backup_xml_file"
+        echo "$(date) [context] Set DNS: $dns1 $dns2" >> "$LOG"
+    fi
+    
+    # Применяем hostname
+    if [ -n "$SET_HOSTNAME" ]; then
+        HOST=$(echo "$SET_HOSTNAME" | cut -d. -f1)
+        hostname "$SET_HOSTNAME"
+        DOMAIN=$(echo "$SET_HOSTNAME" | cut -d. -f2-)
+        # Если hostname и domain совпадают, то устанавливаем домен по умолчанию
+        if [ "$HOST" = "$DOMAIN" ]; then 
+            DOMAIN="home.arpa"
+        fi
+        # Обновляем hostname и domain в backup_xml_file через xml ed
+        xml ed -L \
+            -u "//system/domain" -v "$DOMAIN" \
+            -u "//system/hostname" -v "$HOST" \
+            "$backup_xml_file"
+        echo "$(date) [context] Set hostname: $HOST" >> "$LOG"
+    fi
+    # Проверяем, есть ли отличия между текущим и резервным config.xml
+    # Сравниваем config.xml и backup_xml_file, игнорируя строку с bcrypt-hash
+    if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
+        rm -f "$backup_xml_file"
+        echo "$(date) [context] No changes in config.xml, backup_xml_file removed" >> "$LOG"
+    elif [ -s "$backup_xml_file" ]; then
+        # Если есть изменения, сохраняем резервную копию и обновляем config.xml
+        cp "$backup_xml_file" "$xml_file"
+        echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
+        /etc/rc.reload_all start >> "$LOG" 2>&1
+        echo "$(date) [context] pfSense services reloaded" >> "$LOG"
+        pfSsh.php playback restartallwan >> "$LOG" 2>&1
+        echo "$(date) [context] pfSense services restarted" >> "$LOG"
+
+    fi
+    
+    # Пример: PFCTL=off или PFCTL=ON (переменная задаётся вне скрипта)
+    # Приводим PFCTL к нижнему регистру (безопасно для FreeBSD/pfSense)
+    if [ -n "$PFCTL" ]; then    
+        _lc_pfctl=$(echo "${PFCTL:-}" | tr '[:upper:]' '[:lower:]')
+        case "$_lc_pfctl" in
+            off|0|false|disabled)
+                echo $_lc_pfctl >> "$LOG"
+                pfctl -d >> "$LOG" 2>&1
+                echo '0' > /var/run/pfctlcontext.pid  
+                echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
+                ;;
+	    on|1|true|enabled)
+	        echo $_lc_pfctl >> "$LOG"
+	        rm -f /var/run/pfctlcontext.pid
+		sleep 12
+	        echo "$(date) [context] pfSense firewall enabled" >> "$LOG"
+	        pfctl -s info 2>/dev/null | grep -qi 'Status: Disabled' && pfctl -e >> "$LOG" 2>&1
+	        ;;
+              *)
+                ;;
+        esac
+    fi
+    # Меняем пароль через pfSsh.php playback
+    # Проверяем, отличается ли текущий пароль от нового
+    old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$xml_file")
+    if php -r "exit(password_verify('$PASSWORD', '$old_hash') ? 0 : 1);"; then
+        echo "$(date) [context] Admin password unchanged" >> "$LOG"
+    else
+        pfSsh.php playback ChangePassTool admin "$PASSWORD" >> "$LOG"
+        echo "$(date) [context] Admin password changed" >> "$LOG"
+    fi
+
+    
+} # <--- This closing brace was missing
+
+run_rc_command "$1"
+

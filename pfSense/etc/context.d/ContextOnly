@@ -1,0 +1,300 @@
+#!/bin/sh
+#
+# Add the following line to /cf/conf/config.xml to enable this service:
+# add in /cf/conf/config.xml section "<system>"  line <earlyshellcmd>/etc/rc.d/context onestart</earlyshellcmd>
+# PROVIDE: context
+# REQUIRE: NETWORK netif routing
+# KEYWORD: shutdown
+#
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
+# shellcheck source=/dev/null
+. /etc/rc.subr
+
+name="context"
+desc="OpenNebula: context script executor"
+# shellcheck disable=SC2034
+rcvar="context_enable"
+
+load_rc_config $name
+: "${context_enable:=NO}"
+# shellcheck disable=SC2034
+extra_commands="status stop"
+
+LOG="/tmp/context.log"
+#LOG="/dev/null" # Uncomment for debugging
+CONTEXT_MOUNT="/mnt/context"
+CONTEXT_DEV="/dev/cd0"
+CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
+xml_file="/cf/conf/config.xml"
+backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
+# shellcheck disable=SC2034
+start_cmd="${name}_start"
+# shellcheck disable=SC2034
+stop_cmd="${name}_stop"
+# shellcheck disable=SC2034
+status_cmd="${name}_status"
+
+context_start() {
+    echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
+
+    # Монтируем CD-ROM, если он еще не смонтирован
+    mkdir -p "$CONTEXT_MOUNT"
+    if ! mount | grep -q "on $CONTEXT_MOUNT "; then
+        mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1
+    fi
+
+    # Проверяем наличие файла context.sh на CD-ROM
+    if [ -f "$CONTEXT_FILE" ]; then
+        echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
+        # shellcheck source=/dev/null
+        . "$CONTEXT_FILE"
+        cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
+
+        # Применяем SSH ключ
+        if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+            mkdir -p /root/.ssh
+            if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+                echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+                chmod 600 /root/.ssh/authorized_keys
+                chmod 700 /root/.ssh
+                echo "$(date) [context] SSH public key updated" >> "$LOG"
+            fi
+        fi
+    fi
+
+  # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
+    iface_type_changed=false
+    added_if_count=0
+
+    # Проверяем, есть ли новые ETHx_* переменные против текущего config.xml
+    ctx_if_count=$(set | grep -oE '^ETH[0-9]+_MAC' | wc -l | awk '{print $1}')
+    xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$xml_file" 2>/dev/null || echo 0)
+    if [ "$ctx_if_count" -gt "$xml_if_count" ]; then
+        iface_type_changed=true
+        echo "$(date) [context] Detected $ctx_if_count ETHx entries > $xml_if_count XML entries — rebuild required" >> "$LOG"
+    fi
+
+    # Проверяем несоответствия по описанию
+    for var in $(set | grep -oE '^ETH[0-9]+_TYPE'); do
+        idx=$(echo "$var" | grep -oE '[0-9]+')
+        mac_var="ETH${idx}_MAC"
+        ctx_mac=$(eval "echo \${$mac_var:-}")
+        want_type=$(eval "echo \${$var:-}")
+        [ -n "$ctx_mac" ] || continue
+        [ -n "$want_type" ] || continue
+
+        sys_if=$(ifconfig -l | tr ' ' '\n' | while read i; do
+            sys_mac=$(ifconfig "$i" | awk '/ether/{print $2}')
+            [ "$sys_mac" = "$ctx_mac" ] && echo "$i" && break
+        done)
+        [ -n "$sys_if" ] || continue
+
+        current_descr=$(ifconfig "$sys_if" | awk -F: '/description/{print $2}' | xargs)
+        case "$want_type" in
+            lan) want_descr="LAN" ;;
+            wan) want_descr="WAN" ;;
+            *)   want_descr=$(echo "$want_type" | tr '[:lower:]' '[:upper:]') ;;
+        esac
+        if [ "$current_descr" != "$want_descr" ]; then
+            echo "$(date) [context] ETH${idx}_TYPE mismatch for $sys_if (MAC=$ctx_mac): want=$want_descr, have=$current_descr" >> "$LOG"
+            iface_type_changed=true
+        fi
+    done
+
+    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+        xml ed -L -d "//interfaces/*" "$backup_xml_file"
+
+        sys_ifaces=$(ifconfig -l)
+        lan_count=0
+        wan_count=0
+
+        for iface in $sys_ifaces; do
+            sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
+            [ -n "$sys_mac" ] || continue
+
+            for var in $(set | grep -oE '^ETH[0-9]+_MAC'); do
+                ctx_mac=$(eval "echo \${$var:-}")
+                [ -n "$ctx_mac" ] || continue
+
+                if [ "$ctx_mac" = "$sys_mac" ]; then
+                    idx=$(echo "$var" | grep -oE '[0-9]+')
+
+                    ip_var="ETH${idx}_IP"
+                    mask_var="ETH${idx}_MASK"
+                    gw_var="ETH${idx}_GATEWAY"
+                    type_var="ETH${idx}_TYPE"
+
+                    ip_addr=$(eval "echo \${$ip_var:-}")
+                    mask=$(eval "echo \${$mask_var:-}")
+                    gw=$(eval "echo \${$gw_var:-}")
+                    iface_type=$(eval "echo \${$type_var:-}")
+
+                    # Определяем тип интерфейса
+                    if [ -n "$iface_type" ]; then
+                        network="$iface_type"
+                        case "$iface_type" in
+                            lan) desc="LAN" ;;
+                            wan) desc="WAN" ;;
+                            *)   desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')" ;;
+                        esac
+                    else
+                        if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
+                            lan_count=$((lan_count + 1))
+                            desc="LAN${lan_count}"
+                            network="opt${lan_count}"
+                        else
+                            wan_count=$((wan_count + 1))
+                            desc="WAN${wan_count}"
+                            network="wan${wan_count}"
+                        fi
+                    fi
+                    [ "$network" = "opt1" ] && { network="lan"; desc="LAN"; }
+                    [ "$network" = "wan1" ] && { network="wan"; desc="WAN"; }
+
+                    # Конфигурируем интерфейс
+                    if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
+                        prefix=$(php -r "echo substr_count(decbin(ip2long('$mask')), '1');")
+                        ifconfig "$iface" inet "$ip_addr" netmask "$mask" description "$desc"
+                        ifconfig "$iface" ether "$ctx_mac"
+                        echo "$(date) [context] Added $iface → $desc ($ip_addr/$prefix)" >> "$LOG"
+                        added_if_count=$((added_if_count + 1))
+
+                        xml ed -L \
+                            -s "//interfaces" -t elem -n "$network" -v "" \
+                            -s "//interfaces/$network" -t elem -n "descr" -v "$desc" \
+                            -s "//interfaces/$network" -t elem -n "enable" -v "YES" \
+                            -s "//interfaces/$network" -t elem -n "ipaddr" -v "$ip_addr" \
+                            -s "//interfaces/$network" -t elem -n "if" -v "$iface" \
+                            -s "//interfaces/$network" -t elem -n "spoofmac" -v "$ctx_mac" \
+                            -s "//interfaces/$network" -t elem -n "subnet" -v "$prefix" \
+                            "$backup_xml_file"
+
+                        sed -i '' \
+                            -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
+                            -e 's|<enable>YES</enable>|<enable></enable>|g' \
+                            "$backup_xml_file"
+
+                        if [ "$network" = "wan" ] && [ -n "$gw" ]; then
+                            route delete default >/dev/null 2>&1
+                            route add default "$gw"
+                            xml ed -L \
+                                -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
+                                -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
+                                "$backup_xml_file"
+                            xml ed -L \
+                                -d "//system/gateway" \
+                                -s "//system" -t elem -n "gateway" -v "$gw" \
+                                -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] Gateway: $gw" >> "$LOG"
+                        fi
+                    fi
+                fi
+            done
+        done
+    fi
+
+    echo "$(date) [context] Total interfaces configured: $added_if_count" >> "$LOG"
+    # --- /СЕТИ ---------------------------------------------------------------
+    # DNS
+    all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | while read -r var; do eval "echo \${$var:-}"; done | xargs)
+    if [ -n "$all_dns" ]; then
+        dns1=$(echo "$all_dns" | awk '{print $1}')
+        dns2=$(echo "$all_dns" | awk '{print $NF}')
+        : > /etc/resolv.conf
+        [ -n "$dns1" ] && echo "nameserver $dns1" >> /etc/resolv.conf
+        [ -n "$dns2" ] && echo "nameserver $dns2" >> /etc/resolv.conf
+
+        xml ed -L \
+            -u "//system/dnsserver[1]" -v "$dns1" \
+            -u "//system/dnsserver[2]" -v "$dns2" \
+            -u "//system/dnsallowoverride" -v "" \
+            "$backup_xml_file"
+        echo "$(date) [context] Set DNS: $dns1 $dns2" >> "$LOG"
+    fi
+
+    # Hostname
+    if [ -n "${SET_HOSTNAME:-}" ]; then
+        hostname "$SET_HOSTNAME"
+        xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
+        echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
+    fi
+
+    # Синхронизация config.xml
+    if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
+        rm -f "$backup_xml_file"
+        echo "$(date) [context] No changes in config.xml, backup_xml_file removed" >> "$LOG"
+    elif [ -s "$backup_xml_file" ]; then
+        cp "$backup_xml_file" "$xml_file"
+        echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
+        /etc/rc.reload_all start >> "$LOG" 2>&1
+        echo "$(date) [context] pfSense services reloaded" >> "$LOG"
+        pfSsh.php playback restartallwan >> "$LOG" 2>&1
+        echo "$(date) [context] pfSense services restarted" >> "$LOG"
+    fi
+
+    # PFCTL
+    if [ -n "${PFCTL:-}" ]; then
+        _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
+        case "$_lc_pfctl" in
+            off|0|false|disabled)
+                pfctl -d >> "$LOG" 2>&1
+                echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
+                ;;
+            on|1|true|enabled)
+                if pfctl -s info | grep -q 'Status: Disabled'; then
+                    echo "$(date) [context] pfSense firewall was disabled, enabling now" >> "$LOG"
+                    pfctl -e >> "$LOG" 2>&1
+                    echo "$(date) [context] pfSense firewall enabled" >> "$LOG"
+                fi
+                ;;
+            *)
+                echo "$(date) [context] pfSense firewall state unchanged (PFCTL=$_lc_pfctl)" >> "$LOG"
+                ;;
+        esac
+    fi
+
+    # Пароль admin (через playback)
+    old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$xml_file")
+    if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
+        echo "$(date) [context] Admin password unchanged" >> "$LOG"
+    else
+        pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
+        echo "$(date) [context] Admin password changed" >> "$LOG"
+    fi
+
+   # Отмонтировать диск после выполнения всех операций
+    if mount | grep -q "on $CONTEXT_MOUNT "; then
+        umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
+    else
+        echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
+    fi
+    
+    # BGP-модуль
+    if [ -x /etc/context.d/bgp ]; then
+        echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
+       . /etc/context.d/bgp
+          echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+    fi
+
+ 
+
+    # Повторно проверим SSH ключ (на случай, если не добавился)
+    if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+        mkdir -p /root/.ssh
+        if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+            echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+            chmod 600 /root/.ssh/authorized_keys
+            chmod 700 /root/.ssh
+            echo "$(date) [context] SSH public key updated" >> "$LOG"
+        fi
+    fi
+    # Если были изменения в интерфейсах, перезапускаем службы
+    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+        /etc/rc.reload_all start >> "$LOG" 2>&1
+         rm -f /etc/context.d/net.pid
+    fi
+    echo echo "$(date) [context] FINSH" >> "$LOG"
+} # конец функции
+
+run_rc_command "$1"

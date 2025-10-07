@@ -1,0 +1,21 @@
+#!/bin/sh
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
+PFPID_FILE=/var/run/pfctlcontext.pid
+#LOG=/tmp/context.log
+LOG=/dev/null
+PERIOD=6   # 6 раз за минуту
+
+# Проверяем наличие PID-файла
+ [ -f "$PFPID_FILE" ] || exit 0
+
+ for i in $(seq 1 $PERIOD); do
+     if pfctl -s info 2>/dev/null | grep -qi 'Status: Enabled'; then
+         pfctl -d >> "$LOG" 2>&1
+         echo "$(date) [cron-context] disabled pfctl" >> "$LOG"
+      fi
+     sleep 10
+  done
+
+
+
