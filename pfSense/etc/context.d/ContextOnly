@@ -23,6 +23,7 @@ extra_commands="status stop"
 LOG="/tmp/context.log"
 #LOG="/dev/null" # Uncomment for debugging
 CONTEXT_MOUNT="/mnt/context"
+PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
@@ -60,6 +61,9 @@ context_start() {
                 echo "$(date) [context] SSH public key updated" >> "$LOG"
             fi
         fi
+    else
+        echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
+        return 0
     fi
 
   # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
@@ -101,12 +105,16 @@ context_start() {
         fi
     done
 
-    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         xml ed -L -d "//interfaces/*" "$backup_xml_file"
 
         sys_ifaces=$(ifconfig -l)
-        lan_count=0
-        wan_count=0
+        lan_assigned=false
+        wan_assigned=false
+        lan_extra_count=0
+        wan_extra_count=0
+        next_opt=1
+        used_networks=""
 
         for iface in $sys_ifaces; do
             sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
@@ -131,25 +139,122 @@ context_start() {
 
                     # Определяем тип интерфейса
                     if [ -n "$iface_type" ]; then
-                        network="$iface_type"
-                        case "$iface_type" in
-                            lan) desc="LAN" ;;
-                            wan) desc="WAN" ;;
-                            *)   desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')" ;;
+                        lower_type=$(echo "$iface_type" | tr '[:upper:]' '[:lower:]')
+                        case "$lower_type" in
+                            lan)
+                                if [ "$lan_assigned" = "false" ]; then
+                                    network="lan"
+                                    desc="LAN"
+                                    lan_assigned=true
+                                    used_networks="$used_networks $network"
+                                else
+                                    lan_extra_count=$((lan_extra_count + 1))
+                                    candidate="opt$next_opt"
+                                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                        next_opt=$((next_opt + 1))
+                                        candidate="opt$next_opt"
+                                    done
+                                    network="$candidate"
+                                    used_networks="$used_networks $network"
+                                    next_opt=$((next_opt + 1))
+                                    desc="LAN$((lan_extra_count + 1))"
+                                fi
+                                ;;
+                            wan)
+                                if [ "$wan_assigned" = "false" ]; then
+                                    network="wan"
+                                    desc="WAN"
+                                    wan_assigned=true
+                                    used_networks="$used_networks $network"
+                                else
+                                    wan_extra_count=$((wan_extra_count + 1))
+                                    candidate="opt$next_opt"
+                                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                        next_opt=$((next_opt + 1))
+                                        candidate="opt$next_opt"
+                                    done
+                                    network="$candidate"
+                                    used_networks="$used_networks $network"
+                                    next_opt=$((next_opt + 1))
+                                    desc="WAN$((wan_extra_count + 1))"
+                                fi
+                                ;;
+                            opt[0-9]*)
+                                candidate="$lower_type"
+                                if echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; then
+                                    candidate="opt$next_opt"
+                                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                        next_opt=$((next_opt + 1))
+                                        candidate="opt$next_opt"
+                                    done
+                                    network="$candidate"
+                                    desc="$(echo "$candidate" | tr '[:lower:]' '[:upper:]')"
+                                    used_networks="$used_networks $network"
+                                    next_opt=$((next_opt + 1))
+                                else
+                                    network="$candidate"
+                                    desc="$(echo "$candidate" | tr '[:lower:]' '[:upper:]')"
+                                    used_networks="$used_networks $network"
+                                    opt_index=$(echo "$candidate" | sed 's/^opt//')
+                                    if echo "$opt_index" | grep -Eq '^[0-9]+$'; then
+                                        opt_index=$((opt_index + 1))
+                                        if [ "$opt_index" -gt "$next_opt" ]; then
+                                            next_opt="$opt_index"
+                                        fi
+                                    fi
+                                fi
+                                ;;
+                            *)
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')"
+                                ;;
                         esac
                     else
                         if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
-                            lan_count=$((lan_count + 1))
-                            desc="LAN${lan_count}"
-                            network="opt${lan_count}"
+                            if [ "$lan_assigned" = "false" ]; then
+                                network="lan"
+                                desc="LAN"
+                                lan_assigned=true
+                                used_networks="$used_networks $network"
+                            else
+                                lan_extra_count=$((lan_extra_count + 1))
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                desc="LAN$((lan_extra_count + 1))"
+                            fi
                         else
-                            wan_count=$((wan_count + 1))
-                            desc="WAN${wan_count}"
-                            network="wan${wan_count}"
+                            if [ "$wan_assigned" = "false" ]; then
+                                network="wan"
+                                desc="WAN"
+                                wan_assigned=true
+                                used_networks="$used_networks $network"
+                            else
+                                wan_extra_count=$((wan_extra_count + 1))
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                desc="WAN$((wan_extra_count + 1))"
+                            fi
                         fi
                     fi
-                    [ "$network" = "opt1" ] && { network="lan"; desc="LAN"; }
-                    [ "$network" = "wan1" ] && { network="wan"; desc="WAN"; }
 
                     # Конфигурируем интерфейс
                     if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
@@ -273,8 +378,8 @@ context_start() {
     # BGP-модуль
     if [ -x /etc/context.d/bgp ]; then
         echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
-       . /etc/context.d/bgp
-          echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+        . /etc/context.d/bgp
+        echo "$(date) [context] BGP module (return $?)" >> "$LOG"
     fi
 
  
@@ -290,11 +395,11 @@ context_start() {
         fi
     fi
     # Если были изменения в интерфейсах, перезапускаем службы
-    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         /etc/rc.reload_all start >> "$LOG" 2>&1
-         rm -f /etc/context.d/net.pid
+        rm -f "$PID"
     fi
-    echo echo "$(date) [context] FINSH" >> "$LOG"
+    echo "$(date) [context] FINISH" >> "$LOG"
 } # конец функции
 
 run_rc_command "$1"
