@@ -111,8 +111,6 @@ context_start() {
         sys_ifaces=$(ifconfig -l)
         lan_assigned=false
         wan_assigned=false
-        lan_extra_count=0
-        wan_extra_count=0
         next_opt=1
         used_networks=""
 
@@ -148,7 +146,6 @@ context_start() {
                                     lan_assigned=true
                                     used_networks="$used_networks $network"
                                 else
-                                    lan_extra_count=$((lan_extra_count + 1))
                                     candidate="opt$next_opt"
                                     while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
                                         next_opt=$((next_opt + 1))
@@ -157,7 +154,7 @@ context_start() {
                                     network="$candidate"
                                     used_networks="$used_networks $network"
                                     next_opt=$((next_opt + 1))
-                                    desc="LAN$((lan_extra_count + 1))"
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                                 fi
                                 ;;
                             wan)
@@ -167,7 +164,6 @@ context_start() {
                                     wan_assigned=true
                                     used_networks="$used_networks $network"
                                 else
-                                    wan_extra_count=$((wan_extra_count + 1))
                                     candidate="opt$next_opt"
                                     while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
                                         next_opt=$((next_opt + 1))
@@ -176,7 +172,7 @@ context_start() {
                                     network="$candidate"
                                     used_networks="$used_networks $network"
                                     next_opt=$((next_opt + 1))
-                                    desc="WAN$((wan_extra_count + 1))"
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                                 fi
                                 ;;
                             opt[0-9]*)
@@ -188,12 +184,12 @@ context_start() {
                                         candidate="opt$next_opt"
                                     done
                                     network="$candidate"
-                                    desc="$(echo "$candidate" | tr '[:lower:]' '[:upper:]')"
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                                     used_networks="$used_networks $network"
                                     next_opt=$((next_opt + 1))
                                 else
                                     network="$candidate"
-                                    desc="$(echo "$candidate" | tr '[:lower:]' '[:upper:]')"
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                                     used_networks="$used_networks $network"
                                     opt_index=$(echo "$candidate" | sed 's/^opt//')
                                     if echo "$opt_index" | grep -Eq '^[0-9]+$'; then
@@ -213,7 +209,7 @@ context_start() {
                                 network="$candidate"
                                 used_networks="$used_networks $network"
                                 next_opt=$((next_opt + 1))
-                                desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')"
+                                desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                                 ;;
                         esac
                     else
@@ -224,7 +220,6 @@ context_start() {
                                 lan_assigned=true
                                 used_networks="$used_networks $network"
                             else
-                                lan_extra_count=$((lan_extra_count + 1))
                                 candidate="opt$next_opt"
                                 while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
                                     next_opt=$((next_opt + 1))
@@ -233,7 +228,7 @@ context_start() {
                                 network="$candidate"
                                 used_networks="$used_networks $network"
                                 next_opt=$((next_opt + 1))
-                                desc="LAN$((lan_extra_count + 1))"
+                                desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                             fi
                         else
                             if [ "$wan_assigned" = "false" ]; then
@@ -242,7 +237,6 @@ context_start() {
                                 wan_assigned=true
                                 used_networks="$used_networks $network"
                             else
-                                wan_extra_count=$((wan_extra_count + 1))
                                 candidate="opt$next_opt"
                                 while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
                                     next_opt=$((next_opt + 1))
@@ -251,7 +245,7 @@ context_start() {
                                 network="$candidate"
                                 used_networks="$used_networks $network"
                                 next_opt=$((next_opt + 1))
-                                desc="WAN$((wan_extra_count + 1))"
+                                desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                             fi
                         fi
                     fi
