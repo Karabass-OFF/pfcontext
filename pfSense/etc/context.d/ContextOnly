@@ -23,6 +23,7 @@ extra_commands="status stop"
 LOG="/tmp/context.log"
 #LOG="/dev/null" # Uncomment for debugging
 CONTEXT_MOUNT="/mnt/context"
+PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
@@ -60,6 +61,9 @@ context_start() {
                 echo "$(date) [context] SSH public key updated" >> "$LOG"
             fi
         fi
+    else
+        echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
+        return 0
     fi
 
   # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
@@ -101,12 +105,13 @@ context_start() {
         fi
     done
 
-    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         xml ed -L -d "//interfaces/*" "$backup_xml_file"
 
         sys_ifaces=$(ifconfig -l)
         lan_count=0
         wan_count=0
+        custom_count=0
 
         for iface in $sys_ifaces; do
             sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
@@ -131,11 +136,54 @@ context_start() {
 
                     # Определяем тип интерфейса
                     if [ -n "$iface_type" ]; then
-                        network="$iface_type"
-                        case "$iface_type" in
-                            lan) desc="LAN" ;;
-                            wan) desc="WAN" ;;
-                            *)   desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')" ;;
+                        lower_type=$(echo "$iface_type" | tr '[:upper:]' '[:lower:]')
+                        case "$lower_type" in
+                            lan)
+                                lan_count=$((lan_count + 1))
+                                if [ "$lan_count" -eq 1 ]; then
+                                    network="lan"
+                                    desc="LAN"
+                                else
+                                    network="opt${lan_count}"
+                                    desc="LAN${lan_count}"
+                                fi
+                                ;;
+                            wan)
+                                wan_count=$((wan_count + 1))
+                                if [ "$wan_count" -eq 1 ]; then
+                                    network="wan"
+                                    desc="WAN"
+                                else
+                                    network="wan${wan_count}"
+                                    desc="WAN${wan_count}"
+                                fi
+                                ;;
+                            opt[0-9]*)
+                                network="$lower_type"
+                                desc="$(echo "$lower_type" | tr '[:lower:]' '[:upper:]')"
+                                if [ "$network" = "opt1" ]; then
+                                    lan_count=$((lan_count + 1))
+                                    network="lan"
+                                    desc="LAN"
+                                fi
+                                ;;
+                            wan[0-9]*)
+                                wan_count=$((wan_count + 1))
+                                network="$lower_type"
+                                desc="$(echo "$lower_type" | tr '[:lower:]' '[:upper:]')"
+                                [ "$network" = "wan1" ] && { network="wan"; desc="WAN"; }
+                                ;;
+                            lan[0-9]*)
+                                lan_count=$((lan_count + 1))
+                                network="$lower_type"
+                                desc="$(echo "$lower_type" | tr '[:lower:]' '[:upper:]')"
+                                [ "$network" = "lan1" ] && { network="lan"; desc="LAN"; }
+                                ;;
+                            *)
+                                custom_count=$((custom_count + 1))
+                                network="optcustom${custom_count}"
+                                desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')"
+                                ;;
                         esac
                     else
                         if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
@@ -273,8 +321,8 @@ context_start() {
     # BGP-модуль
     if [ -x /etc/context.d/bgp ]; then
         echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
-       . /etc/context.d/bgp
-          echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+        . /etc/context.d/bgp
+        echo "$(date) [context] BGP module (return $?)" >> "$LOG"
     fi
 
  
@@ -290,11 +338,11 @@ context_start() {
         fi
     fi
     # Если были изменения в интерфейсах, перезапускаем службы
-    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         /etc/rc.reload_all start >> "$LOG" 2>&1
-         rm -f /etc/context.d/net.pid
+        rm -f "$PID"
     fi
-    echo echo "$(date) [context] FINSH" >> "$LOG"
+    echo "$(date) [context] FINISH" >> "$LOG"
 } # конец функции
 
 run_rc_command "$1"
