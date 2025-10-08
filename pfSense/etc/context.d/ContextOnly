@@ -23,6 +23,7 @@ extra_commands="status stop"
 LOG="/tmp/context.log"
 #LOG="/dev/null" # Uncomment for debugging
 CONTEXT_MOUNT="/mnt/context"
+PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
@@ -50,6 +51,95 @@ context_start() {
         . "$CONTEXT_FILE"
         cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
 
+        get_ctx_var() {
+            idx="$1"
+            suffix="$2"
+            val=""
+            eval "val=\${ETH${idx}_${suffix}:-}"
+            if [ -z "${val:-}" ]; then
+                eval "val=\${ETHERNET${idx}_${suffix}:-}"
+            fi
+            printf '%s' "${val:-}"
+        }
+
+        ctx_indices=$(set | sed -n 's/^ETHERNET\([0-9][0-9]*\)_MAC=.*/\1/p; s/^ETH\([0-9][0-9]*\)_MAC=.*/\1/p' | sort -n | uniq)
+        if [ -n "$ctx_indices" ]; then
+            ctx_if_count=$(printf '%s\n' "$ctx_indices" | sed '/^$/d' | wc -l | awk '{print $1}')
+        else
+            ctx_if_count=0
+        fi
+
+        ctx_mac_map=""
+        OLD_IFS=$IFS
+        IFS='\n'
+        for idx in $ctx_indices; do
+            ctx_mac=$(get_ctx_var "$idx" "MAC")
+            [ -n "$ctx_mac" ] || continue
+            ctx_mac_l=$(echo "$ctx_mac" | tr '[:upper:]' '[:lower:]')
+            ctx_mac_map="${ctx_mac_map}${ctx_mac_l}:$idx\n"
+        done
+        IFS=$OLD_IFS
+
+        sys_ifaces=$(ifconfig -l)
+        sys_mac_map=""
+        for iface in $sys_ifaces; do
+            sys_mac=$(ifconfig "$iface" | awk '/ether/{print $2}')
+            [ -n "$sys_mac" ] || continue
+            sys_mac_l=$(echo "$sys_mac" | tr '[:upper:]' '[:lower:]')
+            sys_mac_map="${sys_mac_map}${iface}:${sys_mac_l}\n"
+        done
+
+        find_iface_by_mac() {
+            target=$(printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]')
+            OLD_IFS=$IFS
+            IFS='\n'
+            for entry in $sys_mac_map; do
+                iface=${entry%%:*}
+                mac=${entry#*:}
+                if [ "$mac" = "$target" ]; then
+                    echo "$iface"
+                    IFS=$OLD_IFS
+                    return 0
+                fi
+            done
+            IFS=$OLD_IFS
+            return 1
+        }
+
+        ctx_idx_for_mac() {
+            target=$(printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]')
+            OLD_IFS=$IFS
+            IFS='\n'
+            for entry in $ctx_mac_map; do
+                mac=${entry%%:*}
+                idx=${entry#*:}
+                if [ "$mac" = "$target" ]; then
+                    echo "$idx"
+                    IFS=$OLD_IFS
+                    return 0
+                fi
+            done
+            IFS=$OLD_IFS
+            return 1
+        }
+
+        sys_mac_for_iface() {
+            target="$1"
+            OLD_IFS=$IFS
+            IFS='\n'
+            for entry in $sys_mac_map; do
+                iface=${entry%%:*}
+                mac=${entry#*:}
+                if [ "$iface" = "$target" ]; then
+                    echo "$mac"
+                    IFS=$OLD_IFS
+                    return 0
+                fi
+            done
+            IFS=$OLD_IFS
+            return 1
+        }
+
         # Применяем SSH ключ
         if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
             mkdir -p /root/.ssh
@@ -60,6 +150,9 @@ context_start() {
                 echo "$(date) [context] SSH public key updated" >> "$LOG"
             fi
         fi
+    else
+        echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
+        return 0
     fi
 
   # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
@@ -67,7 +160,6 @@ context_start() {
     added_if_count=0
 
     # Проверяем, есть ли новые ETHx_* переменные против текущего config.xml
-    ctx_if_count=$(set | grep -oE '^ETH[0-9]+_MAC' | wc -l | awk '{print $1}')
     xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$xml_file" 2>/dev/null || echo 0)
     if [ "$ctx_if_count" -gt "$xml_if_count" ]; then
         iface_type_changed=true
@@ -75,129 +167,273 @@ context_start() {
     fi
 
     # Проверяем несоответствия по описанию
-    for var in $(set | grep -oE '^ETH[0-9]+_TYPE'); do
-        idx=$(echo "$var" | grep -oE '[0-9]+')
-        mac_var="ETH${idx}_MAC"
-        ctx_mac=$(eval "echo \${$mac_var:-}")
-        want_type=$(eval "echo \${$var:-}")
+    TMP_IFS=$IFS
+    IFS='\n'
+    for idx in $ctx_indices; do
+        ctx_mac=$(get_ctx_var "$idx" "MAC")
+        want_type=$(get_ctx_var "$idx" "TYPE")
         [ -n "$ctx_mac" ] || continue
         [ -n "$want_type" ] || continue
 
-        sys_if=$(ifconfig -l | tr ' ' '\n' | while read i; do
-            sys_mac=$(ifconfig "$i" | awk '/ether/{print $2}')
-            [ "$sys_mac" = "$ctx_mac" ] && echo "$i" && break
-        done)
+        sys_if=$(find_iface_by_mac "$ctx_mac")
         [ -n "$sys_if" ] || continue
 
         current_descr=$(ifconfig "$sys_if" | awk -F: '/description/{print $2}' | xargs)
-        case "$want_type" in
+        case $(echo "$want_type" | tr '[:upper:]' '[:lower:]') in
             lan) want_descr="LAN" ;;
             wan) want_descr="WAN" ;;
             *)   want_descr=$(echo "$want_type" | tr '[:lower:]' '[:upper:]') ;;
         esac
         if [ "$current_descr" != "$want_descr" ]; then
-            echo "$(date) [context] ETH${idx}_TYPE mismatch for $sys_if (MAC=$ctx_mac): want=$want_descr, have=$current_descr" >> "$LOG"
+            echo "$(date) [context] TYPE mismatch for index $idx on $sys_if (MAC=$ctx_mac): want=$want_descr, have=$current_descr" >> "$LOG"
             iface_type_changed=true
         fi
     done
+    IFS=$TMP_IFS
 
-    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+    # Подсчитываем количество явных запросов LAN/WAN, чтобы авто-назначение
+    # не перехватывало их, если соответствующий интерфейс встретится позже
+    lan_explicit_count=0
+    wan_explicit_count=0
+    TMP_IFS=$IFS
+    IFS='\n'
+    for idx in $ctx_indices; do
+        want=$(get_ctx_var "$idx" "TYPE")
+        [ -n "$want" ] || continue
+        lower_want=$(echo "$want" | tr '[:upper:]' '[:lower:]')
+        case "$lower_want" in
+            lan) lan_explicit_count=$((lan_explicit_count + 1)) ;;
+            wan) wan_explicit_count=$((wan_explicit_count + 1)) ;;
+        esac
+    done
+    IFS=$TMP_IFS
+
+    lan_pending=$lan_explicit_count
+    wan_pending=$wan_explicit_count
+
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         xml ed -L -d "//interfaces/*" "$backup_xml_file"
 
-        sys_ifaces=$(ifconfig -l)
-        lan_count=0
-        wan_count=0
+        lan_assigned=false
+        wan_assigned=false
+        next_opt=1
+        used_networks=""
 
+        TMP_IFS=$IFS
+        IFS='\n'
         for iface in $sys_ifaces; do
-            sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
+            sys_mac=$(sys_mac_for_iface "$iface")
             [ -n "$sys_mac" ] || continue
 
-            for var in $(set | grep -oE '^ETH[0-9]+_MAC'); do
-                ctx_mac=$(eval "echo \${$var:-}")
-                [ -n "$ctx_mac" ] || continue
+            idx=$(ctx_idx_for_mac "$sys_mac")
+            [ -n "$idx" ] || continue
 
-                if [ "$ctx_mac" = "$sys_mac" ]; then
-                    idx=$(echo "$var" | grep -oE '[0-9]+')
+            ctx_mac=$(get_ctx_var "$idx" "MAC")
+            ip_addr=$(get_ctx_var "$idx" "IP")
+            mask=$(get_ctx_var "$idx" "MASK")
+            gw=$(get_ctx_var "$idx" "GATEWAY")
+            iface_type=$(get_ctx_var "$idx" "TYPE")
 
-                    ip_var="ETH${idx}_IP"
-                    mask_var="ETH${idx}_MASK"
-                    gw_var="ETH${idx}_GATEWAY"
-                    type_var="ETH${idx}_TYPE"
-
-                    ip_addr=$(eval "echo \${$ip_var:-}")
-                    mask=$(eval "echo \${$mask_var:-}")
-                    gw=$(eval "echo \${$gw_var:-}")
-                    iface_type=$(eval "echo \${$type_var:-}")
-
-                    # Определяем тип интерфейса
-                    if [ -n "$iface_type" ]; then
-                        network="$iface_type"
-                        case "$iface_type" in
-                            lan) desc="LAN" ;;
-                            wan) desc="WAN" ;;
-                            *)   desc="$(echo "$iface_type" | tr '[:lower:]' '[:upper:]')" ;;
-                        esac
-                    else
-                        if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
-                            lan_count=$((lan_count + 1))
-                            desc="LAN${lan_count}"
-                            network="opt${lan_count}"
+            if [ -n "$iface_type" ]; then
+                lower_type=$(echo "$iface_type" | tr '[:upper:]' '[:lower:]')
+                case "$lower_type" in
+                    lan)
+                        if [ "$lan_pending" -gt 0 ]; then
+                            lan_pending=$((lan_pending - 1))
+                        fi
+                        if [ "$lan_assigned" = "false" ]; then
+                            network="lan"
+                            desc="LAN"
+                            lan_assigned=true
+                            used_networks="$used_networks $network"
                         else
-                            wan_count=$((wan_count + 1))
-                            desc="WAN${wan_count}"
-                            network="wan${wan_count}"
+                            echo "$(date) [context] Duplicate LAN request for $iface (MAC=$ctx_mac) — assigning OPT" >> "$LOG"
+                            candidate="opt$next_opt"
+                            while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                next_opt=$((next_opt + 1))
+                                candidate="opt$next_opt"
+                            done
+                            network="$candidate"
+                            used_networks="$used_networks $network"
+                            next_opt=$((next_opt + 1))
+                            desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                         fi
+                        ;;
+                    wan)
+                        if [ "$wan_pending" -gt 0 ]; then
+                            wan_pending=$((wan_pending - 1))
+                        fi
+                        if [ "$wan_assigned" = "false" ]; then
+                            network="wan"
+                            desc="WAN"
+                            wan_assigned=true
+                            used_networks="$used_networks $network"
+                        else
+                            echo "$(date) [context] Duplicate WAN request for $iface (MAC=$ctx_mac) — assigning OPT" >> "$LOG"
+                            candidate="opt$next_opt"
+                            while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                next_opt=$((next_opt + 1))
+                                candidate="opt$next_opt"
+                            done
+                            network="$candidate"
+                            used_networks="$used_networks $network"
+                            next_opt=$((next_opt + 1))
+                            desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                        fi
+                        ;;
+                    opt[0-9]*)
+                        candidate="$lower_type"
+                        if echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; then
+                            candidate="opt$next_opt"
+                            while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                next_opt=$((next_opt + 1))
+                                candidate="opt$next_opt"
+                            done
+                            network="$candidate"
+                            desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                            used_networks="$used_networks $network"
+                            next_opt=$((next_opt + 1))
+                        else
+                            network="$candidate"
+                            desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                            used_networks="$used_networks $network"
+                            opt_index=$(echo "$candidate" | sed 's/^opt//')
+                            if echo "$opt_index" | grep -Eq '^[0-9]+$'; then
+                                opt_index=$((opt_index + 1))
+                                if [ "$opt_index" -gt "$next_opt" ]; then
+                                    next_opt="$opt_index"
+                                fi
+                            fi
+                        fi
+                        ;;
+                    *)
+                        candidate="opt$next_opt"
+                        while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                            next_opt=$((next_opt + 1))
+                            candidate="opt$next_opt"
+                        done
+                        network="$candidate"
+                        used_networks="$used_networks $network"
+                        next_opt=$((next_opt + 1))
+                        desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                        ;;
+                esac
+            else
+                if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
+                    if [ "$lan_assigned" = "false" ] && [ "$lan_pending" -eq 0 ]; then
+                        network="lan"
+                        desc="LAN"
+                        lan_assigned=true
+                        used_networks="$used_networks $network"
+                    else
+                        candidate="opt$next_opt"
+                        while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                            next_opt=$((next_opt + 1))
+                            candidate="opt$next_opt"
+                        done
+                        network="$candidate"
+                        used_networks="$used_networks $network"
+                        next_opt=$((next_opt + 1))
+                        desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                     fi
-                    [ "$network" = "opt1" ] && { network="lan"; desc="LAN"; }
-                    [ "$network" = "wan1" ] && { network="wan"; desc="WAN"; }
-
-                    # Конфигурируем интерфейс
-                    if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
-                        prefix=$(php -r "echo substr_count(decbin(ip2long('$mask')), '1');")
-                        ifconfig "$iface" inet "$ip_addr" netmask "$mask" description "$desc"
-                        ifconfig "$iface" ether "$ctx_mac"
-                        echo "$(date) [context] Added $iface → $desc ($ip_addr/$prefix)" >> "$LOG"
-                        added_if_count=$((added_if_count + 1))
-
-                        xml ed -L \
-                            -s "//interfaces" -t elem -n "$network" -v "" \
-                            -s "//interfaces/$network" -t elem -n "descr" -v "$desc" \
-                            -s "//interfaces/$network" -t elem -n "enable" -v "YES" \
-                            -s "//interfaces/$network" -t elem -n "ipaddr" -v "$ip_addr" \
-                            -s "//interfaces/$network" -t elem -n "if" -v "$iface" \
-                            -s "//interfaces/$network" -t elem -n "spoofmac" -v "$ctx_mac" \
-                            -s "//interfaces/$network" -t elem -n "subnet" -v "$prefix" \
-                            "$backup_xml_file"
-
-                        sed -i '' \
-                            -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
-                            -e 's|<enable>YES</enable>|<enable></enable>|g' \
-                            "$backup_xml_file"
-
-                        if [ "$network" = "wan" ] && [ -n "$gw" ]; then
-                            route delete default >/dev/null 2>&1
-                            route add default "$gw"
-                            xml ed -L \
-                                -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
-                                -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
-                                "$backup_xml_file"
-                            xml ed -L \
-                                -d "//system/gateway" \
-                                -s "//system" -t elem -n "gateway" -v "$gw" \
-                                -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" \
-                                "$backup_xml_file"
-                            echo "$(date) [context] Gateway: $gw" >> "$LOG"
-                        fi
+                else
+                    if [ "$wan_assigned" = "false" ] && [ "$wan_pending" -eq 0 ]; then
+                        network="wan"
+                        desc="WAN"
+                        wan_assigned=true
+                        used_networks="$used_networks $network"
+                    else
+                        candidate="opt$next_opt"
+                        while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                            next_opt=$((next_opt + 1))
+                            candidate="opt$next_opt"
+                        done
+                        network="$candidate"
+                        used_networks="$used_networks $network"
+                        next_opt=$((next_opt + 1))
+                        desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                     fi
                 fi
-            done
+            fi
+
+            if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
+                prefix=$(php -r "echo substr_count(decbin(ip2long('$mask')), '1');")
+                ifconfig "$iface" inet "$ip_addr" netmask "$mask" description "$desc"
+                ifconfig "$iface" ether "$ctx_mac"
+                echo "$(date) [context] Added $iface → $desc ($ip_addr/$prefix)" >> "$LOG"
+                added_if_count=$((added_if_count + 1))
+
+                xml ed -L \
+                    -s "//interfaces" -t elem -n "$network" -v "" \
+                    -s "//interfaces/$network" -t elem -n "descr" -v "$desc" \
+                    -s "//interfaces/$network" -t elem -n "enable" -v "YES" \
+                    -s "//interfaces/$network" -t elem -n "ipaddr" -v "$ip_addr" \
+                    -s "//interfaces/$network" -t elem -n "if" -v "$iface" \
+                    -s "//interfaces/$network" -t elem -n "spoofmac" -v "$ctx_mac" \
+                    -s "//interfaces/$network" -t elem -n "subnet" -v "$prefix" \
+                    "$backup_xml_file"
+
+                sed -i '' \
+                    -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
+                    -e 's|<enable>YES</enable>|<enable></enable>|g' \
+                    "$backup_xml_file"
+
+                dhcp_start=$(get_ctx_var "$idx" "DHCP_START")
+                dhcp_end=$(get_ctx_var "$idx" "DHCP_END")
+
+                if [ -n "$dhcp_start" ] && [ -n "$dhcp_end" ]; then
+                    if ! xml sel -t -v "count(//dhcpd)" "$backup_xml_file" 2>/dev/null | grep -q '[1-9]'; then
+                        xml ed -L -s "//config" -t elem -n "dhcpd" -v "" "$backup_xml_file"
+                    fi
+                    xml ed -L \
+                        -s "//dhcpd" -t elem -n "$network" -v "" \
+                        -s "//dhcpd/$network" -t elem -n "range" -v "" \
+                        -s "//dhcpd/$network/range" -t elem -n "from" -v "$dhcp_start" \
+                        -s "//dhcpd/$network/range" -t elem -n "to" -v "$dhcp_end" \
+                        -s "//dhcpd/$network" -t elem -n "enable" -v "" \
+                        "$backup_xml_file"
+                else
+                    xml ed -L -d "//dhcpd/$network" "$backup_xml_file" 2>/dev/null
+                fi
+
+                if [ "$network" = "wan" ] && [ -n "$gw" ]; then
+                    route delete default >/dev/null 2>&1
+                    route add default "$gw"
+                    xml ed -L \
+                        -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
+                        -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
+                        "$backup_xml_file"
+                    xml ed -L \
+                        -d "//system/gateway" \
+                        -s "//system" -t elem -n "gateway" -v "$gw" \
+                        -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" \
+                        "$backup_xml_file"
+                    echo "$(date) [context] Gateway: $gw" >> "$LOG"
+                fi
+            fi
         done
+        IFS=$TMP_IFS
     fi
 
     echo "$(date) [context] Total interfaces configured: $added_if_count" >> "$LOG"
     # --- /СЕТИ ---------------------------------------------------------------
     # DNS
-    all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | while read -r var; do eval "echo \${$var:-}"; done | xargs)
+    dns_list=""
+    TMP_IFS=$IFS
+    IFS='\n'
+    for idx in $ctx_indices; do
+        dns_val=$(get_ctx_var "$idx" "DNS")
+        [ -n "$dns_val" ] || continue
+        INNER_IFS=$IFS
+        IFS=' '
+        for token in $dns_val; do
+            [ -n "$token" ] || continue
+            dns_list="$dns_list $token"
+        done
+        IFS=$INNER_IFS
+    done
+    IFS=$TMP_IFS
+    all_dns=$(printf '%s\n' "$dns_list" | awk '{$1=$1; print}')
     if [ -n "$all_dns" ]; then
         dns1=$(echo "$all_dns" | awk '{print $1}')
         dns2=$(echo "$all_dns" | awk '{print $NF}')
@@ -273,8 +509,8 @@ context_start() {
     # BGP-модуль
     if [ -x /etc/context.d/bgp ]; then
         echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
-       . /etc/context.d/bgp
-          echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+        . /etc/context.d/bgp
+        echo "$(date) [context] BGP module (return $?)" >> "$LOG"
     fi
 
  
@@ -290,11 +526,11 @@ context_start() {
         fi
     fi
     # Если были изменения в интерфейсах, перезапускаем службы
-    if [ -f "/etc/context.d/net.pid" ] || $iface_type_changed; then
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         /etc/rc.reload_all start >> "$LOG" 2>&1
-         rm -f /etc/context.d/net.pid
+        rm -f "$PID"
     fi
-    echo echo "$(date) [context] FINSH" >> "$LOG"
+    echo "$(date) [context] FINISH" >> "$LOG"
 } # конец функции
 
 run_rc_command "$1"
