@@ -115,6 +115,22 @@ context_start() {
         fi
     done
 
+    # Подсчитываем количество явных запросов LAN/WAN, чтобы авто-назначение
+    # не перехватывало их, если соответствующий интерфейс встретится позже
+    lan_explicit_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u | while read -r var; do
+        idx=$(echo "$var" | grep -oE '[0-9]+')
+        want=$(get_ctx_var "$idx" "TYPE" | tr '[:upper:]' '[:lower:]')
+        [ "${want}" = "lan" ] && echo 1
+    done | wc -l | awk '{print $1}')
+    wan_explicit_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u | while read -r var; do
+        idx=$(echo "$var" | grep -oE '[0-9]+')
+        want=$(get_ctx_var "$idx" "TYPE" | tr '[:upper:]' '[:lower:]')
+        [ "${want}" = "wan" ] && echo 1
+    done | wc -l | awk '{print $1}')
+
+    lan_pending=$lan_explicit_count
+    wan_pending=$wan_explicit_count
+
     if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
         xml ed -L -d "//interfaces/*" "$backup_xml_file"
 
@@ -145,12 +161,16 @@ context_start() {
                         lower_type=$(echo "$iface_type" | tr '[:upper:]' '[:lower:]')
                         case "$lower_type" in
                             lan)
+                                if [ "$lan_pending" -gt 0 ]; then
+                                    lan_pending=$((lan_pending - 1))
+                                fi
                                 if [ "$lan_assigned" = "false" ]; then
                                     network="lan"
                                     desc="LAN"
                                     lan_assigned=true
                                     used_networks="$used_networks $network"
                                 else
+                                    echo "$(date) [context] Duplicate LAN request for $iface (MAC=$ctx_mac) — assigning OPT" >> "$LOG"
                                     candidate="opt$next_opt"
                                     while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
                                         next_opt=$((next_opt + 1))
@@ -163,12 +183,16 @@ context_start() {
                                 fi
                                 ;;
                             wan)
+                                if [ "$wan_pending" -gt 0 ]; then
+                                    wan_pending=$((wan_pending - 1))
+                                fi
                                 if [ "$wan_assigned" = "false" ]; then
                                     network="wan"
                                     desc="WAN"
                                     wan_assigned=true
                                     used_networks="$used_networks $network"
                                 else
+                                    echo "$(date) [context] Duplicate WAN request for $iface (MAC=$ctx_mac) — assigning OPT" >> "$LOG"
                                     candidate="opt$next_opt"
                                     while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
                                         next_opt=$((next_opt + 1))
@@ -219,7 +243,7 @@ context_start() {
                         esac
                     else
                         if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
-                            if [ "$lan_assigned" = "false" ]; then
+                            if [ "$lan_assigned" = "false" ] && [ "$lan_pending" -eq 0 ]; then
                                 network="lan"
                                 desc="LAN"
                                 lan_assigned=true
@@ -236,7 +260,7 @@ context_start() {
                                 desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                             fi
                         else
-                            if [ "$wan_assigned" = "false" ]; then
+                            if [ "$wan_assigned" = "false" ] && [ "$wan_pending" -eq 0 ]; then
                                 network="wan"
                                 desc="WAN"
                                 wan_assigned=true
