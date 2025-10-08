@@ -51,6 +51,17 @@ context_start() {
         . "$CONTEXT_FILE"
         cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
 
+        get_ctx_var() {
+            idx="$1"
+            suffix="$2"
+            val=""
+            eval "val=\${ETH${idx}_${suffix}:-}"
+            if [ -z "${val:-}" ]; then
+                eval "val=\${ETHERNET${idx}_${suffix}:-}"
+            fi
+            printf '%s' "${val:-}"
+        }
+
         # Применяем SSH ключ
         if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
             mkdir -p /root/.ssh
@@ -71,7 +82,7 @@ context_start() {
     added_if_count=0
 
     # Проверяем, есть ли новые ETHx_* переменные против текущего config.xml
-    ctx_if_count=$(set | grep -oE '^ETH[0-9]+_MAC' | wc -l | awk '{print $1}')
+    ctx_if_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_MAC' | sort -u | wc -l | awk '{print $1}')
     xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$xml_file" 2>/dev/null || echo 0)
     if [ "$ctx_if_count" -gt "$xml_if_count" ]; then
         iface_type_changed=true
@@ -79,11 +90,10 @@ context_start() {
     fi
 
     # Проверяем несоответствия по описанию
-    for var in $(set | grep -oE '^ETH[0-9]+_TYPE'); do
+    for var in $(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u); do
         idx=$(echo "$var" | grep -oE '[0-9]+')
-        mac_var="ETH${idx}_MAC"
-        ctx_mac=$(eval "echo \${$mac_var:-}")
-        want_type=$(eval "echo \${$var:-}")
+        ctx_mac=$(get_ctx_var "$idx" "MAC")
+        want_type=$(get_ctx_var "$idx" "TYPE")
         [ -n "$ctx_mac" ] || continue
         [ -n "$want_type" ] || continue
 
@@ -100,7 +110,7 @@ context_start() {
             *)   want_descr=$(echo "$want_type" | tr '[:lower:]' '[:upper:]') ;;
         esac
         if [ "$current_descr" != "$want_descr" ]; then
-            echo "$(date) [context] ETH${idx}_TYPE mismatch for $sys_if (MAC=$ctx_mac): want=$want_descr, have=$current_descr" >> "$LOG"
+            echo "$(date) [context] ${var} mismatch for $sys_if (MAC=$ctx_mac): want=$want_descr, have=$current_descr" >> "$LOG"
             iface_type_changed=true
         fi
     done
@@ -118,22 +128,17 @@ context_start() {
             sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
             [ -n "$sys_mac" ] || continue
 
-            for var in $(set | grep -oE '^ETH[0-9]+_MAC'); do
-                ctx_mac=$(eval "echo \${$var:-}")
+            for var in $(set | grep -oE '^ETH(ERNET)?[0-9]+_MAC' | sort -u); do
+                ctx_mac=$(eval "printf '%s' \"\${$var:-}\"")
                 [ -n "$ctx_mac" ] || continue
 
                 if [ "$ctx_mac" = "$sys_mac" ]; then
                     idx=$(echo "$var" | grep -oE '[0-9]+')
 
-                    ip_var="ETH${idx}_IP"
-                    mask_var="ETH${idx}_MASK"
-                    gw_var="ETH${idx}_GATEWAY"
-                    type_var="ETH${idx}_TYPE"
-
-                    ip_addr=$(eval "echo \${$ip_var:-}")
-                    mask=$(eval "echo \${$mask_var:-}")
-                    gw=$(eval "echo \${$gw_var:-}")
-                    iface_type=$(eval "echo \${$type_var:-}")
+                    ip_addr=$(get_ctx_var "$idx" "IP")
+                    mask=$(get_ctx_var "$idx" "MASK")
+                    gw=$(get_ctx_var "$idx" "GATEWAY")
+                    iface_type=$(get_ctx_var "$idx" "TYPE")
 
                     # Определяем тип интерфейса
                     if [ -n "$iface_type" ]; then
@@ -273,6 +278,24 @@ context_start() {
                             -e 's|<enable>YES</enable>|<enable></enable>|g' \
                             "$backup_xml_file"
 
+                        dhcp_start=$(get_ctx_var "$idx" "DHCP_START")
+                        dhcp_end=$(get_ctx_var "$idx" "DHCP_END")
+
+                        if [ -n "$dhcp_start" ] && [ -n "$dhcp_end" ]; then
+                            if ! xml sel -t -v "count(//dhcpd)" "$backup_xml_file" 2>/dev/null | grep -q '[1-9]'; then
+                                xml ed -L -s "//config" -t elem -n "dhcpd" -v "" "$backup_xml_file"
+                            fi
+                            xml ed -L \
+                                -s "//dhcpd" -t elem -n "$network" -v "" \
+                                -s "//dhcpd/$network" -t elem -n "range" -v "" \
+                                -s "//dhcpd/$network/range" -t elem -n "from" -v "$dhcp_start" \
+                                -s "//dhcpd/$network/range" -t elem -n "to" -v "$dhcp_end" \
+                                -s "//dhcpd/$network" -t elem -n "enable" -v "" \
+                                "$backup_xml_file"
+                        else
+                            xml ed -L -d "//dhcpd/$network" "$backup_xml_file" 2>/dev/null
+                        fi
+
                         if [ "$network" = "wan" ] && [ -n "$gw" ]; then
                             route delete default >/dev/null 2>&1
                             route add default "$gw"
@@ -296,7 +319,7 @@ context_start() {
     echo "$(date) [context] Total interfaces configured: $added_if_count" >> "$LOG"
     # --- /СЕТИ ---------------------------------------------------------------
     # DNS
-    all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | while read -r var; do eval "echo \${$var:-}"; done | xargs)
+    all_dns=$(set | grep -oE '^ETH(ERNET)?[0-9]+_DNS' | sort -u | while read -r var; do eval "echo \${$var:-}"; done | xargs)
     if [ -n "$all_dns" ]; then
         dns1=$(echo "$all_dns" | awk '{print $1}')
         dns2=$(echo "$all_dns" | awk '{print $NF}')
