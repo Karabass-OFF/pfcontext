@@ -21,18 +21,31 @@ PHPBIN="/usr/local/bin/php"
 [ -x "$PHPBIN" ] || { log "php CLI not found at $PHPBIN"; exit 1; }
 
 # --- 1) Context variables ----------------------------------------------------
-CONTEXT_MOUNT="/mnt/context"
-CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
-CONTEXT_DEV="/dev/cd0"
+# Основной скрипт ContextOnly уже смонтировал CD-ROM и экспортировал
+# переменные окружения. Если модуль запускают вручную, попробуем
+# подхватить их из уже смонтированного каталога (без самостоятельного mount).
+CONTEXT_FILE="/mnt/context/context.sh"
+if [ -z "${BGP_ENABLE+x}" ] || [ -z "${BGP_AS+x}" ] || [ -z "${BGP_ROUTER_ID+x}" ]; then
+  # shellcheck source=/dev/null
+  [ -r "$CONTEXT_FILE" ] && . "$CONTEXT_FILE"
+fi
 
-    # Монтируем CD-ROM, если он еще не смонтирован
-    mkdir -p "$CONTEXT_MOUNT"
-    if ! mount | grep -q "on $CONTEXT_MOUNT "; then
-        mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1
-    fi
-
-# shellcheck source=/dev/null
-[ -f "$CONTEXT_FILE" ] && . "$CONTEXT_FILE" || true
+# Гарантируем наличие переменных даже при отсутствии контекста,
+# чтобы set -u не обрывал выполнение (значения могут быть пустыми).
+: "${BGP_ENABLE:=}"
+: "${BGP_AS:=}"
+: "${BGP_ROUTER_ID:=}"
+: "${BGP_NEIGHBORS:=}"
+: "${BGP_RMAP_DEFAULT:=ALL}"
+: "${BGP_REDIST_CONNECTED:=no}"
+: "${BGP_REDIST_STATIC:=no}"
+: "${BGP_REDIST_KERNEL:=no}"
+: "${BGP_ADJACENCY_LOG:=on}"
+: "${BGP_NETWORKS_TO_DISTRIBUTE:=}"
+: "${FRR_ENABLE:=on}"
+: "${FRR_DEFAULT_ROUTER_ID:=${BGP_ROUTER_ID:-}}"
+: "${FRR_MASTER_PASSWORD:=}"
+: "${FRR_PASSWORD_ENCRYPT:=}"
 
 ensure_frr_vtysh_conf() {
     if [ ! -f /var/etc/frr/vtysh.conf ]; then
@@ -75,20 +88,6 @@ ensure_frr_vtysh_conf() {
 ensure_frr_vtysh_conf
 
 # --- FRR global options from context ----------------------------------------
-#: "${BGP_ENABLE:=on}"
-#: "${BGP_AS:-}"
-: "${BGP_ROUTER_ID:=}"
-#: "${BGP_NEIGHBORS:=2.2.2.2,65115,mAE9e0SOB4tb1uQH6 11.123.12.2,65115,mAE9e0SOB4tb1uQH6}"
-#: "${BGP_RMAP_DEFAULT:=ALL}"
-#: "${BGP_REDIST_CONNECTED:=no}"
-#: "${BGP_REDIST_STATIC:=no}"
-#: "${BGP_REDIST_KERNEL:=no}"
-#: "${BGP_ADJACENCY_LOG:=on}"
-#: "${BGP_NETWORKS_TO_DISTRIBUTE:=3.3.3.0/29,ALL 4.4.4.0/24,ALL}"
-#: "${FRR_ENABLE:=on}"                               # on| (пусто)
-: "${FRR_DEFAULT_ROUTER_ID:=${BGP_ROUTER_ID:-}}"    # глобальный RID (UI: Default Router ID)
-#: "${FRR_MASTER_PASSWORD:=lhgklgkuyfgkiyu}"                        # UI: Master Password
-: "${FRR_PASSWORD_ENCRYPT:=}"                       # '' или 'on' (если хочешь хранить зашифровано в config.xml)
 # Логирование переменных
 mask() {
   # маскируем пароль в логах: первые 2 и последние 2 символа видны
@@ -125,20 +124,11 @@ log_vars() {
 }
 log_vars
 
-   # Отмонтировать диск после выполнения всех операций
-    if mount | grep -q "on $CONTEXT_MOUNT "; then
-        umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
-    else
-        echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
-    fi
-
 # для безопасной подстановки пароля в PHP (экранируем одинарные кавычки)
 ESC_FRR_MASTER_PASS=$(printf "%s" "$FRR_MASTER_PASSWORD" | sed "s/'/\\\\'/g")
 
 [ "$BGP_ENABLE" = "on" ] || { log "disabled by context"; return 0; }
 [ -n "$BGP_AS" ] && [ -n "$BGP_ROUTER_ID" ] || { log "BGP_AS or BGP_ROUTER_ID empty"; return 0; }
-
-STATE_HASH_FILE="/var/run/context-bgp.hash"
 
 # --- 1b) Detect changes in input variables ---------------------------------
 STATE_HASH_FILE="/var/run/context-bgp.hash"
