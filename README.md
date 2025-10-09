@@ -1,29 +1,40 @@
 # pfcontext
 
-## Обновление скрипта ContextOnly
+Набор сценариев автоматизации для pfSense, адаптированных под контекст OpenNebula. Репозиторий содержит основной модуль `ContextOnly`, вспомогательные обработчики сетевой безопасности, FRR/BGP, а также скрипт расширения ZFS.
 
-1. Скопируйте файл `pfSense/etc/context.d/ContextOnly` из этого репозитория на устройство pfSense по SSH или через `scp`:
+## Структура
+
+| Путь | Назначение | Документация |
+| ---- | ---------- | ------------- |
+| `pfSense/etc/context.d/ContextOnly` | Основной обработчик контекста OpenNebula для pfSense. Создаёт интерфейсы, настраивает DNS, пароль администратора, управляет pfctl и вызывает дополнительные модули. | [Readme$context](pfSense/Readme$context.md) |
+| `pfSense/etc/context.d/bgp` | Генерирует конфигурацию FRR/BGP из переменных контекста и синхронизирует её с `config.xml` и running-config. | [Readme$bgp](pfSense/Readme$bgp.md) |
+| `pfSense/etc/context.d/ResizeZfs` | Расширяет пул `pfSense` до доступного размера тома. | [Readme$zfs](pfSense/Readme$zfs.md) |
+| `pfSense/etc/context.d/pfctl_off` | Отключает pf при необходимости, когда контекст задаёт `PFCTL=off`. | [Readme$pfctl](pfSense/Readme$pfctl.md) |
+| `pfSense/etc/context.d/frr` | Штатный rc-скрипт pfSense для запуска демонов FRR. | [Readme$frr](pfSense/Readme$frr.md) |
+
+## Базовая установка
+
+1. Скопируйте нужные сценарии на хост pfSense:
    ```sh
-   scp pfSense/etc/context.d/ContextOnly root@<pfSense-IP>:/etc/context.d/ContextOnly
+   scp -r pfSense/etc/context.d/ root@<pfSense-IP>:/etc/context.d/
    ```
-2. На устройстве pfSense сделайте файл исполняемым, если он потерял права после копирования:
+2. Проверьте права:
    ```sh
-   chmod +x /etc/context.d/ContextOnly
+   chmod +x /etc/context.d/*
    ```
-3. При следующем запуске службы контекста (`/etc/rc.d/context onestart`) изменения будут считаны именно из `/etc/context.d/ContextOnly`.
+3. Убедитесь, что служба контекста включена в `config.xml`:
+   ```xml
+   <earlyshellcmd>/etc/rc.d/context onestart</earlyshellcmd>
+   ```
+4. Запустите контекст вручную для проверки:
+   ```sh
+   /etc/rc.d/context onestart
+   ```
 
-> **Важно.** Все правки сохраняются в файле `pfSense/etc/context.d/ContextOnly` внутри репозитория. При деплое используйте именно его, файл `pfSense/etc/context.d/old/ContextOnly` оставлен только для справки.
+## Проверка
 
-## DHCP сервер
+* Основной лог контекста: `/tmp/context.log`.
+* Лог BGP: `/var/log/context-bgp.log`.
+* Для отладки расширения ZFS временно переключите `LOG` в `ResizeZfs` на `/tmp/context.log`.
 
-Скрипт явно выключает DHCP на всех интерфейсах, которые настраиваются из переменных `ETHx_*`, если для них не заданы диапазоны `ETHx_DHCP_START` и `ETHx_DHCP_END`. Это предотвращает автоматическое включение сервиса pfSense по умолчанию. Чтобы включить DHCP, передайте оба параметра с нужным диапазоном выдачи адресов.
-
-## Типы интерфейсов
-
-Для ручного назначения ролей сетевых портов используйте переменные `ETHx_TYPE` или `ETHERNETx_TYPE`. Допустимые значения:
-
-- `lan`
-- `wan`
-- `optN`, где `N` — число без ведущих нулей
-
-Если заданы явные значения `lan` или `wan`, скрипт зарезервирует их до тех пор, пока не встретит интерфейс с подходящим MAC-адресом, поэтому автоматическая логика не «перехватит» роль у заданного вручную порта, даже если он обрабатывается позже. Остальные интерфейсы получают последовательные `OPT`-имена.
+Подробные инструкции по каждому модулю приведены в соответствующих файлах README.
