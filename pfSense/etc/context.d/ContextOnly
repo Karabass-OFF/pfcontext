@@ -10,6 +10,11 @@ PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 # shellcheck source=/dev/null
 . /etc/rc.subr
 
+# FreeBSD rc.subr expects this internal helper to exist even if the script
+# isn't launched via service(8); ensure it is defined to avoid "parameter not
+# set" errors when running "onestart" directly.
+: "${_rc_svcj:=}"
+
 name="context"
 desc="OpenNebula: context script executor"
 # shellcheck disable=SC2034
