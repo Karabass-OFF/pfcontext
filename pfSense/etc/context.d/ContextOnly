@@ -7,13 +7,14 @@
 # KEYWORD: shutdown
 #
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
+# FreeBSD rc.subr (used below) may reference the internal helper `_rc_svcj`
+# while loading, and when the script is launched directly with `onestart`
+# under `set -u` semantics the variable being unset raises a fatal error.
+# Prime it before sourcing rc.subr so the include never faults.
+: "${_rc_svcj:=}"
+
 # shellcheck source=/dev/null
 . /etc/rc.subr
-
-# FreeBSD rc.subr expects this internal helper to exist even if the script
-# isn't launched via service(8); ensure it is defined to avoid "parameter not
-# set" errors when running "onestart" directly.
-: "${_rc_svcj:=}"
 
 name="context"
 desc="OpenNebula: context script executor"
