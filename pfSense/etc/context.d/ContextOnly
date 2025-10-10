@@ -1,266 +1,330 @@
 #!/bin/sh
 #
-# OpenNebula context integration for pfSense
-#  - Mounts context CD-ROM and sources context variables
-#  - Configures network interfaces based on OpenNebula metadata
-#  - Applies additional context settings (SSH keys, DNS, hostname, etc.)
+# Add the following line to /cf/conf/config.xml to enable this service:
+# add in /cf/conf/config.xml section "<system>"  line <earlyshellcmd>/etc/rc.d/context onestart</earlyshellcmd>
+# PROVIDE: context
+# REQUIRE: NETWORK netif routing
+# KEYWORD: shutdown
 #
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
-# shellcheck source=/dev/null
-. /etc/rc.subr
 
-name="context"
-desc="OpenNebula: context script executor"
-# shellcheck disable=SC2034
-rcvar="context_enable"
-
-load_rc_config $name
-: "${context_enable:=NO}"
-# shellcheck disable=SC2034
-extra_commands="status stop"
-
-LOG="/var/log/context.log"
+LOG="/tmp/context.log"
+#LOG="/dev/null" # Uncomment for debugging
 CONTEXT_MOUNT="/mnt/context"
+PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
-XML_FILE="/cf/conf/config.xml"
-BACKUP_DIR="/cf/conf/backup"
-BACKUP_XML="$BACKUP_DIR/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
+xml_file="/cf/conf/config.xml"
+backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
 
-log() {
-    echo "$(date) [context] $*" >> "$LOG"
-}
 
-mount_context() {
+    echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
+
+    # Монтируем CD-ROM, если он еще не смонтирован
     mkdir -p "$CONTEXT_MOUNT"
     if ! mount | grep -q "on $CONTEXT_MOUNT "; then
-        if ! mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1; then
-            log "failed to mount $CONTEXT_DEV"
-            return 1
-        fi
-        log "mounted $CONTEXT_DEV to $CONTEXT_MOUNT"
-    fi
-    return 0
-}
-
-umount_context() {
-    if mount | grep -q "on $CONTEXT_MOUNT "; then
-        if umount "$CONTEXT_MOUNT" >> "$LOG" 2>&1; then
-            log "unmounted $CONTEXT_MOUNT"
-        fi
-    fi
-}
-
-get_ctx_var() {
-    idx="$1"
-    suffix="$2"
-    val=""
-    eval "val=\${ETH${idx}_${suffix}:-}"
-    if [ -z "${val:-}" ]; then
-        eval "val=\${ETHERNET${idx}_${suffix}:-}"
-    fi
-    printf '%s' "${val:-}"
-}
-
-calc_prefix() {
-    mask="$1"
-    [ -n "$mask" ] || return 1
-    php -r "echo substr_count(decbin(ip2long('$mask')), '1');" 2>/dev/null
-}
-
-find_sys_iface() {
-    target=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-    [ -n "$target" ] || return 1
-    for iface in $(ifconfig -l); do
-        mac=$(ifconfig "$iface" | awk '/ether/{print tolower($2)}')
-        if [ "$mac" = "$target" ]; then
-            echo "$iface"
-            return 0
-        fi
-    done
-    return 1
-}
-
-ensure_dhcp_node() {
-    file="$1"
-    if ! xml sel -t -v "count(//dhcpd)" "$file" 2>/dev/null | grep -q '[1-9]'; then
-        xml ed -L -s "//config" -t elem -n "dhcpd" -v "" "$file"
-    fi
-}
-
-configure_network() {
-    file="$1"
-
-    wantype=$(printf '%s' "${WANTYPE:-}" | tr '[:upper:]' '[:lower:]')
-    lantype=$(printf '%s' "${LANTYPE:-}" | tr '[:upper:]' '[:lower:]')
-    dhcp_enabled_list=$(printf '%s' "${DHCPENNABLE:-}" | tr ',;' '\n' | sed 's/[[:space:]]//g' | sed '/^$/d' | tr '[:upper:]' '[:lower:]')
-
-    is_dhcp_enabled() {
-        entry=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-        if [ -z "$dhcp_enabled_list" ]; then
-            return 1
-        fi
-        echo "$dhcp_enabled_list" | grep -qx "$entry"
-    }
-
-    xml ed -L -d "//interfaces/*" "$file" 2>/dev/null
-
-    ctx_indices=$( (
-        env | sed -n 's/^ETH\([0-9][0-9]*\)_MAC=.*/\1/p'
-        env | sed -n 's/^ETHERNET\([0-9][0-9]*\)_MAC=.*/\1/p'
-    ) | sort -n | uniq )
-
-    if [ -z "$ctx_indices" ]; then
-        log "no ETHx_MAC entries provided in context"
-        return
+        mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1
     fi
 
-    lan_used=false
-    wan_used=false
-    opt_index=1
-    used_sys_if=""
+    # Проверяем наличие файла context.sh на CD-ROM
+    if [ -f "$CONTEXT_FILE" ]; then
+        echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
+        # shellcheck source=/dev/null
+        . "$CONTEXT_FILE"
+        cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
 
-    for idx in $ctx_indices; do
-        ctx_name="eth${idx}"
-        ctx_mac=$(get_ctx_var "$idx" "MAC")
-        [ -n "$ctx_mac" ] || { log "${ctx_name}: MAC missing"; continue; }
+        get_ctx_var() {
+            idx="$1"
+            suffix="$2"
+            val=""
+            eval "val=\${ETH${idx}_${suffix}:-}"
+            if [ -z "${val:-}" ]; then
+                eval "val=\${ETHERNET${idx}_${suffix}:-}"
+            fi
+            printf '%s' "${val:-}"
+        }
 
-        sys_if=$(find_sys_iface "$ctx_mac")
-        if [ -z "$sys_if" ]; then
-            log "${ctx_name}: no system interface matches MAC $ctx_mac"
-            continue
-        fi
-        case " $used_sys_if " in
-            *" $sys_if "*)
-                log "${ctx_name}: system interface $sys_if already processed"
-                continue
-                ;;
-        esac
-        used_sys_if="$used_sys_if $sys_if"
-
-        role=""
-        desc=""
-        if [ "$ctx_name" = "$wantype" ] && [ "$wan_used" = "false" ]; then
-            role="wan"
-            desc="WAN"
-            wan_used=true
-        elif [ "$ctx_name" = "$lantype" ] && [ "$lan_used" = "false" ]; then
-            role="lan"
-            desc="LAN"
-            lan_used=true
-        else
-            role="opt$opt_index"
-            desc=$(echo "$role" | tr '[:lower:]' '[:upper:]')
-            opt_index=$((opt_index + 1))
-        fi
-
-        ip=$(get_ctx_var "$idx" "IP")
-        mask=$(get_ctx_var "$idx" "MASK")
-        gw=$(get_ctx_var "$idx" "GATEWAY")
-        dhcp_start=$(get_ctx_var "$idx" "DHCP_START")
-        dhcp_end=$(get_ctx_var "$idx" "DHCP_END")
-
-        mode="dhcp"
-        prefix=""
-        if [ -n "$ip" ] && [ -n "$mask" ]; then
-            prefix=$(calc_prefix "$mask")
-            if [ -n "$prefix" ]; then
-                mode="static"
-            else
-                log "${ctx_name}: invalid netmask $mask"
+        # Применяем SSH ключ
+        if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+            mkdir -p /root/.ssh
+            if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+                echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+                chmod 600 /root/.ssh/authorized_keys
+                chmod 700 /root/.ssh
+                echo "$(date) [context] SSH public key updated" >> "$LOG"
             fi
         fi
+    else
+        echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
+        return 0
+    fi
 
-        # --- APPLY INTERFACE SETTINGS VIA SYSTEM COMMANDS -------------------
-        if [ "$mode" = "static" ]; then
-            ifconfig "$sys_if" inet "$ip" netmask "$mask" >> "$LOG" 2>&1
-        fi
-        ifconfig "$sys_if" ether "$ctx_mac" >> "$LOG" 2>&1
-        ifconfig "$sys_if" description "$desc" >> "$LOG" 2>&1
-        ifconfig "$sys_if" up >> "$LOG" 2>&1
-        if [ "$mode" = "static" ]; then
-            log "$sys_if ($ctx_name → $role) set to $ip/$prefix"
-        else
-            log "$sys_if ($ctx_name → $role) set to DHCP"
-        fi
-        # -------------------------------------------------------------------
+  # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
+    iface_type_changed=false
+    added_if_count=0
 
-        xml ed -L -d "//interfaces/$role" "$file" 2>/dev/null
-        if [ "$mode" = "static" ]; then
-            xml ed -L \
-                -s "//interfaces" -t elem -n "$role" -v "" \
-                -s "//interfaces/$role" -t elem -n "if" -v "$sys_if" \
-                -s "//interfaces/$role" -t elem -n "descr" -v "$desc" \
-                -s "//interfaces/$role" -t elem -n "enable" -v "" \
-                -s "//interfaces/$role" -t elem -n "ipaddr" -v "$ip" \
-                -s "//interfaces/$role" -t elem -n "subnet" -v "$prefix" \
-                -s "//interfaces/$role" -t elem -n "spoofmac" -v "$ctx_mac" \
-                "$file"
-        else
-            xml ed -L \
-                -s "//interfaces" -t elem -n "$role" -v "" \
-                -s "//interfaces/$role" -t elem -n "if" -v "$sys_if" \
-                -s "//interfaces/$role" -t elem -n "descr" -v "$desc" \
-                -s "//interfaces/$role" -t elem -n "enable" -v "" \
-                -s "//interfaces/$role" -t elem -n "ipaddr" -v "dhcp" \
-                -s "//interfaces/$role" -t elem -n "spoofmac" -v "$ctx_mac" \
-                "$file"
-        fi
+    # Проверяем, есть ли новые ETHx_* переменные против текущего config.xml
+    ctx_if_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_MAC' | sort -u | wc -l | awk '{print $1}')
+    xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$xml_file" 2>/dev/null || echo 0)
+    if [ "$ctx_if_count" -gt "$xml_if_count" ]; then
+        iface_type_changed=true
+        echo "$(date) [context] Detected $ctx_if_count ETHx entries > $xml_if_count XML entries — rebuild required" >> "$LOG"
+    fi
 
-        xml ed -L -d "//dhcpd/$role" "$file" 2>/dev/null
-        if is_dhcp_enabled "$ctx_name" && [ -n "$dhcp_start" ] && [ -n "$dhcp_end" ]; then
-            ensure_dhcp_node "$file"
-            xml ed -L \
-                -s "//dhcpd" -t elem -n "$role" -v "" \
-                -s "//dhcpd/$role" -t elem -n "range" -v "" \
-                -s "//dhcpd/$role/range" -t elem -n "from" -v "$dhcp_start" \
-                -s "//dhcpd/$role/range" -t elem -n "to" -v "$dhcp_end" \
-                -s "//dhcpd/$role" -t elem -n "enable" -v "" \
-                "$file"
-            log "$role DHCP enabled: $dhcp_start - $dhcp_end"
-        else
-            log "$role DHCP disabled"
-        fi
+    # Проверяем несоответствия по описанию
+    for var in $(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u); do
+        idx=$(echo "$var" | grep -oE '[0-9]+')
+        ctx_mac=$(get_ctx_var "$idx" "MAC")
+        want_type=$(get_ctx_var "$idx" "TYPE")
+        [ -n "$ctx_mac" ] || continue
+        [ -n "$want_type" ] || continue
 
-        if [ "$role" = "wan" ] && [ "$mode" = "static" ] && [ -n "$gw" ]; then
-            route delete default >> "$LOG" 2>&1
-            route add default "$gw" >> "$LOG" 2>&1
-            xml ed -L -d "//system/gateway" "$file" 2>/dev/null
-            xml ed -L -s "//system" -t elem -n "gateway" -v "$gw" "$file"
-            xml ed -L -d "//interfaces/$role/gateway" "$file" 2>/dev/null
-            xml ed -L -s "//interfaces/$role" -t elem -n "gateway" -v "WANGW" "$file"
-            xml ed -L -d "//interfaces/$role/blockpriv" "$file" 2>/dev/null
-            xml ed -L -s "//interfaces/$role" -t elem -n "blockpriv" -v "" "$file"
-            xml ed -L -d "//interfaces/$role/blockbogons" "$file" 2>/dev/null
-            xml ed -L -s "//interfaces/$role" -t elem -n "blockbogons" -v "" "$file"
-            log "wan gateway set to $gw"
+        sys_if=$(ifconfig -l | tr ' ' '\n' | while read i; do
+            sys_mac=$(ifconfig "$i" | awk '/ether/{print $2}')
+            [ "$sys_mac" = "$ctx_mac" ] && echo "$i" && break
+        done)
+        [ -n "$sys_if" ] || continue
+
+        current_descr=$(ifconfig "$sys_if" | awk -F: '/description/{print $2}' | xargs)
+        case "$want_type" in
+            lan) want_descr="LAN" ;;
+            wan) want_descr="WAN" ;;
+            *)   want_descr=$(echo "$want_type" | tr '[:lower:]' '[:upper:]') ;;
+        esac
+        if [ "$current_descr" != "$want_descr" ]; then
+            echo "$(date) [context] ${var} mismatch for $sys_if (MAC=$ctx_mac): want=$want_descr, have=$current_descr" >> "$LOG"
+            iface_type_changed=true
         fi
     done
-}
 
-context_start() {
-    log "=== START ContextOnly ==="
+    # Подсчитываем количество явных запросов LAN/WAN, чтобы авто-назначение
+    # не перехватывало их, если соответствующий интерфейс встретится позже
+    lan_explicit_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u | while read -r var; do
+        idx=$(echo "$var" | grep -oE '[0-9]+')
+        want=$(get_ctx_var "$idx" "TYPE" | tr '[:upper:]' '[:lower:]')
+        [ "${want}" = "lan" ] && echo 1
+    done | wc -l | awk '{print $1}')
+    wan_explicit_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u | while read -r var; do
+        idx=$(echo "$var" | grep -oE '[0-9]+')
+        want=$(get_ctx_var "$idx" "TYPE" | tr '[:upper:]' '[:lower:]')
+        [ "${want}" = "wan" ] && echo 1
+    done | wc -l | awk '{print $1}')
 
-    if ! mount_context; then
-        log "context media not available"
-        return 0
+    lan_pending=$lan_explicit_count
+    wan_pending=$wan_explicit_count
+
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
+        xml ed -L -d "//interfaces/*" "$backup_xml_file"
+
+        sys_ifaces=$(ifconfig -l) 
+        lan_assigned=false
+        wan_assigned=false
+        next_opt=1
+        used_networks=""
+
+        for iface in $sys_ifaces; do
+            sys_mac=$(ifconfig "$iface" | awk '/ether/ {print $2}')
+            [ -n "$sys_mac" ] || continue
+
+            for var in $(set | grep -oE '^ETH(ERNET)?[0-9]+_MAC' | sort -u); do
+                ctx_mac=$(eval "printf '%s' \"\${$var:-}\"")
+                [ -n "$ctx_mac" ] || continue
+
+                if [ "$ctx_mac" = "$sys_mac" ]; then
+                    idx=$(echo "$var" | grep -oE '[0-9]+')
+
+                    ip_addr=$(get_ctx_var "$idx" "IP")
+                    mask=$(get_ctx_var "$idx" "MASK")
+                    gw=$(get_ctx_var "$idx" "GATEWAY")
+                    iface_type=$(get_ctx_var "$idx" "TYPE")
+
+                    # Определяем тип интерфейса
+                    if [ -n "$iface_type" ]; then
+                        lower_type=$(echo "$iface_type" | tr '[:upper:]' '[:lower:]')
+                        case "$lower_type" in
+                            lan)
+                                if [ "$lan_pending" -gt 0 ]; then
+                                    lan_pending=$((lan_pending - 1))
+                                fi
+                                if [ "$lan_assigned" = "false" ]; then
+                                    network="lan"
+                                    desc="LAN"
+                                    lan_assigned=true
+                                    used_networks="$used_networks $network"
+                                else
+                                    echo "$(date) [context] Duplicate LAN request for $iface (MAC=$ctx_mac) — assigning OPT" >> "$LOG"
+                                    candidate="opt$next_opt"
+                                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                        next_opt=$((next_opt + 1))
+                                        candidate="opt$next_opt"
+                                    done
+                                    network="$candidate"
+                                    used_networks="$used_networks $network"
+                                    next_opt=$((next_opt + 1))
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                                fi
+                                ;;
+                            wan)
+                                if [ "$wan_pending" -gt 0 ]; then
+                                    wan_pending=$((wan_pending - 1))
+                                fi
+                                if [ "$wan_assigned" = "false" ]; then
+                                    network="wan"
+                                    desc="WAN"
+                                    wan_assigned=true
+                                    used_networks="$used_networks $network"
+                                else
+                                    echo "$(date) [context] Duplicate WAN request for $iface (MAC=$ctx_mac) — assigning OPT" >> "$LOG"
+                                    candidate="opt$next_opt"
+                                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                        next_opt=$((next_opt + 1))
+                                        candidate="opt$next_opt"
+                                    done
+                                    network="$candidate"
+                                    used_networks="$used_networks $network"
+                                    next_opt=$((next_opt + 1))
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                                fi
+                                ;;
+                            opt[0-9]*)
+                                candidate="$lower_type"
+                                if echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; then
+                                    candidate="opt$next_opt"
+                                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                        next_opt=$((next_opt + 1))
+                                        candidate="opt$next_opt"
+                                    done
+                                    network="$candidate"
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                                    used_networks="$used_networks $network"
+                                    next_opt=$((next_opt + 1))
+                                else
+                                    network="$candidate"
+                                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                                    used_networks="$used_networks $network"
+                                    opt_index=$(echo "$candidate" | sed 's/^opt//')
+                                    if echo "$opt_index" | grep -Eq '^[0-9]+$'; then
+                                        opt_index=$((opt_index + 1))
+                                        if [ "$opt_index" -gt "$next_opt" ]; then
+                                            next_opt="$opt_index"
+                                        fi
+                                    fi
+                                fi
+                                ;;
+                            *)
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                                ;;
+                        esac
+                    else
+                        if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
+                            if [ "$lan_assigned" = "false" ] && [ "$lan_pending" -eq 0 ]; then
+                                network="lan"
+                                desc="LAN"
+                                lan_assigned=true
+                                used_networks="$used_networks $network"
+                            else
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                            fi
+                        else
+                            if [ "$wan_assigned" = "false" ] && [ "$wan_pending" -eq 0 ]; then
+                                network="wan"
+                                desc="WAN"
+                                wan_assigned=true
+                                used_networks="$used_networks $network"
+                            else
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
+                            fi
+                        fi
+                    fi
+
+                    # Конфигурируем интерфейс
+                    if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
+                        prefix=$(php -r "echo substr_count(decbin(ip2long('$mask')), '1');")
+                        ifconfig "$iface" inet "$ip_addr" netmask "$mask" description "$desc"
+                        ifconfig "$iface" ether "$ctx_mac"
+                        echo "$(date) [context] Added $iface → $desc ($ip_addr/$prefix)" >> "$LOG"
+                        added_if_count=$((added_if_count + 1))
+
+                        xml ed -L \
+                            -s "//interfaces" -t elem -n "$network" -v "" \
+                            -s "//interfaces/$network" -t elem -n "descr" -v "$desc" \
+                            -s "//interfaces/$network" -t elem -n "enable" -v "YES" \
+                            -s "//interfaces/$network" -t elem -n "ipaddr" -v "$ip_addr" \
+                            -s "//interfaces/$network" -t elem -n "if" -v "$iface" \
+                            -s "//interfaces/$network" -t elem -n "spoofmac" -v "$ctx_mac" \
+                            -s "//interfaces/$network" -t elem -n "subnet" -v "$prefix" \
+                            "$backup_xml_file"
+
+                        sed -i '' \
+                            -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
+                            -e 's|<enable>YES</enable>|<enable></enable>|g' \
+                            "$backup_xml_file"
+
+                        dhcp_start=$(get_ctx_var "$idx" "DHCP_START")
+                        dhcp_end=$(get_ctx_var "$idx" "DHCP_END")
+
+                        if [ -n "$dhcp_start" ] && [ -n "$dhcp_end" ]; then
+                            if ! xml sel -t -v "count(//dhcpd)" "$backup_xml_file" 2>/dev/null | grep -q '[1-9]'; then
+                                xml ed -L -s "//config" -t elem -n "dhcpd" -v "" "$backup_xml_file"
+                            fi
+                            xml ed -L \
+                                -s "//dhcpd" -t elem -n "$network" -v "" \
+                                -s "//dhcpd/$network" -t elem -n "range" -v "" \
+                                -s "//dhcpd/$network/range" -t elem -n "from" -v "$dhcp_start" \
+                                -s "//dhcpd/$network/range" -t elem -n "to" -v "$dhcp_end" \
+                                -s "//dhcpd/$network" -t elem -n "enable" -v "" \
+                                "$backup_xml_file"
+                        else
+                            xml ed -L -d "//dhcpd/$network" "$backup_xml_file" 2>/dev/null
+                        fi
+
+                        if [ "$network" = "wan" ] && [ -n "$gw" ]; then
+                            route delete default >/dev/null 2>&1
+                            route add default "$gw"
+                            xml ed -L \
+                                -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
+                                -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
+                                "$backup_xml_file"
+                            xml ed -L \
+                                -d "//system/gateway" \
+                                -s "//system" -t elem -n "gateway" -v "$gw" \
+                                -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] Gateway: $gw" >> "$LOG"
+                        fi
+                    fi
+                fi
+            done
+        done
     fi
 
-    if [ ! -f "$CONTEXT_FILE" ]; then
-        log "$CONTEXT_FILE not found, exiting"
-        umount_context
-        return 0
-    fi
-
-    # shellcheck source=/dev/null
-    . "$CONTEXT_FILE"
-
-    mkdir -p "$BACKUP_DIR"
-    cp "$XML_FILE" "$BACKUP_XML"
-
-    configure_network "$BACKUP_XML"
-
-    # DNS configuration
+    echo "$(date) [context] Total interfaces configured: $added_if_count" >> "$LOG"
+    # --- /СЕТИ ---------------------------------------------------------------
+    # DNS
     all_dns=$(set | grep -oE '^ETH(ERNET)?[0-9]+_DNS' | sort -u | while read -r var; do eval "echo \${$var:-}"; done | xargs)
     if [ -n "$all_dns" ]; then
         dns1=$(echo "$all_dns" | awk '{print $1}')
@@ -268,92 +332,94 @@ context_start() {
         : > /etc/resolv.conf
         [ -n "$dns1" ] && echo "nameserver $dns1" >> /etc/resolv.conf
         [ -n "$dns2" ] && echo "nameserver $dns2" >> /etc/resolv.conf
+
         xml ed -L \
             -u "//system/dnsserver[1]" -v "$dns1" \
             -u "//system/dnsserver[2]" -v "$dns2" \
             -u "//system/dnsallowoverride" -v "" \
-            "$BACKUP_XML"
-        log "DNS servers set to: $dns1 $dns2"
+            "$backup_xml_file"
+        echo "$(date) [context] Set DNS: $dns1 $dns2" >> "$LOG"
     fi
 
     # Hostname
     if [ -n "${SET_HOSTNAME:-}" ]; then
         hostname "$SET_HOSTNAME"
-        xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$BACKUP_XML"
-        log "hostname set to $SET_HOSTNAME"
+        xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
+        echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
     fi
 
-    # SSH public key
-    if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
-        mkdir -p /root/.ssh
-        if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
-            echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
-            chmod 600 /root/.ssh/authorized_keys
-            chmod 700 /root/.ssh
-            log "SSH public key installed"
-        fi
-    fi
-
-    # Apply config if changed
-    if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$XML_FILE" "$BACKUP_XML" >/dev/null; then
-        rm -f "$BACKUP_XML"
-        log "config.xml unchanged"
-    else
-        cp "$BACKUP_XML" "$XML_FILE"
-        log "config.xml updated"
+    # Синхронизация config.xml
+    if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
+        rm -f "$backup_xml_file"
+        echo "$(date) [context] No changes in config.xml, backup_xml_file removed" >> "$LOG"
+    elif [ -s "$backup_xml_file" ]; then
+        cp "$backup_xml_file" "$xml_file"
+        echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
         /etc/rc.reload_all start >> "$LOG" 2>&1
+        echo "$(date) [context] pfSense services reloaded" >> "$LOG"
         pfSsh.php playback restartallwan >> "$LOG" 2>&1
-        log "pfSense services reloaded"
+        echo "$(date) [context] pfSense services restarted" >> "$LOG"
     fi
 
-    # PF firewall state
+    # PFCTL
     if [ -n "${PFCTL:-}" ]; then
-        case $(echo "$PFCTL" | tr '[:upper:]' '[:lower:]') in
+        _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
+        case "$_lc_pfctl" in
             off|0|false|disabled)
                 pfctl -d >> "$LOG" 2>&1
-                log "pf firewall disabled"
+                echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
                 ;;
             on|1|true|enabled)
                 if pfctl -s info | grep -q 'Status: Disabled'; then
+                    echo "$(date) [context] pfSense firewall was disabled, enabling now" >> "$LOG"
                     pfctl -e >> "$LOG" 2>&1
-                    log "pf firewall enabled"
+                    echo "$(date) [context] pfSense firewall enabled" >> "$LOG"
                 fi
                 ;;
             *)
-                log "pf firewall state unchanged (PFCTL=$PFCTL)"
+                echo "$(date) [context] pfSense firewall state unchanged (PFCTL=$_lc_pfctl)" >> "$LOG"
                 ;;
         esac
     fi
 
-    # Admin password
-    old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$XML_FILE")
+    # Пароль admin (через playback)
+    old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$xml_file")
     if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
-        log "admin password unchanged"
+        echo "$(date) [context] Admin password unchanged" >> "$LOG"
     else
         pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
-        log "admin password updated"
+        echo "$(date) [context] Admin password changed" >> "$LOG"
     fi
 
-    # Run optional BGP module
+   # Отмонтировать диск после выполнения всех операций
+    if mount | grep -q "on $CONTEXT_MOUNT "; then
+        umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
+    else
+        echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
+    fi
+    
+    # BGP-модуль
     if [ -x /etc/context.d/bgp ]; then
-        log "executing /etc/context.d/bgp"
+        echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
         . /etc/context.d/bgp
-        log "bgp module finished with code $?"
+        echo "$(date) [context] BGP module (return $?)" >> "$LOG"
     fi
 
-    # SSH key re-check (idempotence)
+ 
+
+    # Повторно проверим SSH ключ (на случай, если не добавился)
     if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
         mkdir -p /root/.ssh
         if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
             echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
             chmod 600 /root/.ssh/authorized_keys
             chmod 700 /root/.ssh
-            log "SSH public key installed (second attempt)"
+            echo "$(date) [context] SSH public key updated" >> "$LOG"
         fi
     fi
-
-    umount_context
-    log "=== FINISH ContextOnly ==="
-}
-
-run_rc_command "$1"
+    # Если были изменения в интерфейсах, перезапускаем службы
+    if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
+        /etc/rc.reload_all start >> "$LOG" 2>&1
+        rm -f "$PID"
+    fi
+    echo "$(date) [context] FINISH" >> "$LOG"
