@@ -1,5 +1,7 @@
 #!/bin/sh
 #
+# ContextOnly script for pfSense
+#
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 
 LOG="/var/log/context.log"
@@ -59,7 +61,6 @@ for var in $(set | grep -oE '^ETH(ERNET)?[0-9]+_TYPE' | sort -u); do
         sys_mac=$(ifconfig "$i" | awk '/ether/{print $2}')
         [ "$sys_mac" = "$ctx_mac" ] && echo "$i" && break
     done)
-    # Если не нашли, пропускаем
     [ -n "$sys_if" ] || continue
     current_descr=$(ifconfig "$sys_if" | awk -F: '/description/{print $2}' | xargs)
     case "$want_type" in
@@ -329,6 +330,7 @@ elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, ко
     cp "$backup_xml_file" "$xml_file"
     echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
     # Перезагрузка служб pfSense (если указано в контексте)
+    
     if [ "${RC_RELOAD_ALL}" = "on" ]; then
         # Перезагружаем службы pfSense
         /etc/rc.reload_all start >> "$LOG" 2>&1
@@ -395,9 +397,9 @@ if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
         echo "$(date) [context] SSH public key updated" >> "$LOG"
     fi
 fi
-# Если были изменения в интерфейсах, перезапускаем службы
-if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
-    /etc/rc.reload_all start >> "$LOG" 2>&1
-    rm -f "$PID"
-fi
+### Если были изменения в интерфейсах, перезапускаем службы
+##if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
+##    /etc/rc.reload_all start >> "$LOG" 2>&1
+##    rm -f "$PID"
+##fi
 echo "$(date) [context] FINISH" >> "$LOG"

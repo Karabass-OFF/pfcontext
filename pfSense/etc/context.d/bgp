@@ -4,10 +4,10 @@
 
 set -eu
 #LOG="/dev/null"  # set to /var/log/context-bgp.log for debug
-LOG="/var/log/context-bgp.log"
+LOGBGP="/var/log/context-bgp.log"
 log() {
   ts=$(date +"%Y-%m-%d %H:%M:%S")
-  printf "%s [context] BGP: %s\n" "$ts" "$*" >> "$LOG" 2>/dev/null
+  printf "%s [context] BGP: %s\n" "$ts" "$*" >> "$LOGBGP" 2>/dev/null
 }
 
 # --- 0) Preconditions --------------------------------------------------------
@@ -30,29 +30,14 @@ if [ -z "${BGP_ENABLE+x}" ] || [ -z "${BGP_AS+x}" ] || [ -z "${BGP_ROUTER_ID+x}"
   [ -r "$CONTEXT_FILE" ] && . "$CONTEXT_FILE"
 fi
 
-# Гарантируем наличие переменных даже при отсутствии контекста,
-# чтобы set -u не обрывал выполнение (значения могут быть пустыми).
-: "${BGP_ENABLE:=}"
-: "${BGP_AS:=}"
-: "${BGP_ROUTER_ID:=}"
-: "${BGP_NEIGHBORS:=}"
-: "${BGP_RMAP_DEFAULT:=ALL}"
-: "${BGP_REDIST_CONNECTED:=no}"
-: "${BGP_REDIST_STATIC:=no}"
-: "${BGP_REDIST_KERNEL:=no}"
-: "${BGP_ADJACENCY_LOG:=on}"
-: "${BGP_NETWORKS_TO_DISTRIBUTE:=}"
-: "${FRR_ENABLE:=on}"
-: "${FRR_DEFAULT_ROUTER_ID:=${BGP_ROUTER_ID:-}}"
-: "${FRR_MASTER_PASSWORD:=}"
-: "${FRR_PASSWORD_ENCRYPT:=}"
+# shellcheck source=/dev/null
+[ -f "$CONTEXT_FILE" ] && . "$CONTEXT_FILE" || true
 
+# Ensure vtysh.conf exists (FRR 7.5+ requires it)
 ensure_frr_vtysh_conf() {
-    if [ ! -f /var/etc/frr/vtysh.conf ]; then
-        log "vtysh.conf not found, generating via PHP"
-
-        TMPPHP="/tmp/frr_apply.$$.php"
-        /usr/bin/printf '%s\n' \
+# Генерируем vtysh.conf через frr.inc
+TMPPHP="/tmp/frr_apply.$$.php"
+/usr/bin/printf '%s\n' \
 '<?php' \
 'require_once("/etc/inc/globals.inc");' \
 'require_once("/etc/inc/config.inc");' \
@@ -72,30 +57,49 @@ ensure_frr_vtysh_conf() {
 'if(!$called) echo "ERROR: no FRR configure function\n";' \
 '?>' \
 > "$TMPPHP"
-
-        if ! "$PHPBIN" "$TMPPHP" >>"$LOG" 2>&1; then
+        # Запускаем PHP скрипт для генерации vtysh.conf (логируем вывод) 
+        if ! "$PHPBIN" "$TMPPHP" >>"$LOGBGP" 2>&1; then
             log "Failed to run $TMPPHP"
         fi
+        # Удаляем временный файл
         rm -f "$TMPPHP"
-
-        /usr/local/etc/rc.d/frr restart || /usr/local/etc/rc.d/frr start
         log "FRR restarted after generating vtysh.conf"
-    else
-        log "vtysh.conf already exists, skip generation"
-    fi
+        # Перезапускаем FRR, чтобы подхватить новый vtysh.conf  
+        #/usr/local/etc/rc.d/frr restart || /usr/local/etc/rc.d/frr start
+        #log "FRR restarted after generating vtysh.conf"
+    
 }
 
-ensure_frr_vtysh_conf
-
+    if [ ! -f /var/etc/frr/vtysh.conf ]; then
+    log "vtysh.conf not found, generating via ensure_frr_vtysh_conf function and restarting FRR"
+        ensure_frr_vtysh_conf # Вызов функции обеспечения vtysh.conf 
+    else # vtysh.conf уже есть
+        log "vtysh.conf already exists, skip generation" 
+    fi
+    
 # --- FRR global options from context ----------------------------------------
-# Логирование переменных
+#: "${BGP_ENABLE:=on}"
+#: "${BGP_AS:-}"
+: "${BGP_ROUTER_ID:=}"
+#: "${BGP_NEIGHBORS:=2.2.2.2,65115,mAE9e0SOB4tb1uQH6 11.123.12.2,65115,mAE9e0SOB4tb1uQH6}"
+#: "${BGP_RMAP_DEFAULT:=ALL}"
+: "${BGP_REDIST_CONNECTED:=no}"
+: "${BGP_REDIST_STATIC:=no}"
+: "${BGP_REDIST_KERNEL:=no}"
+: "${BGP_ADJACENCY_LOG:=on}"
+#: "${BGP_NETWORKS_TO_DISTRIBUTE:=3.3.3.0/29,ALL 4.4.4.0/24,ALL}"
+: "${FRR_ENABLE:=on}"                               # on| (пусто)
+: "${FRR_DEFAULT_ROUTER_ID:=${BGP_ROUTER_ID:-}}"    # глобальный RID (UI: Default Router ID)
+#: "${FRR_MASTER_PASSWORD:=lhgklgkuyfgkiyu}"                        # UI: Master Password
+: "${FRR_PASSWORD_ENCRYPT:=}"                       # '' или 'on' (если хочешь хранить зашифровано в config.xml)
+# Логирование переменных (без паролей) для отладки 
 mask() {
   # маскируем пароль в логах: первые 2 и последние 2 символа видны
   v="$1"; [ -z "$v" ] && { printf -- "-"; return; }
   l=${#v}
   if [ "$l" -le 4 ]; then printf '****'; else printf '%s****%s' "${v%${v#??}}" "${v#*${v%??}}"; fi
 }
-
+# Логируем все переменные (без паролей)
 log_vars() {
   log "BGP_ENABLE=$BGP_ENABLE"
   [ -n "${BGP_AS:-}" ] && log "BGP_AS=$BGP_AS" || log "BGP_AS=(unset)"
@@ -110,10 +114,10 @@ log_vars() {
   log "FRR_DEFAULT_ROUTER_ID=$FRR_DEFAULT_ROUTER_ID"
   log "FRR_MASTER_PASSWORD=$(mask "$FRR_MASTER_PASSWORD")"
   log "FRR_PASSWORD_ENCRYPT=$FRR_PASSWORD_ENCRYPT"
-
   # Кратко про соседей (без паролей)
   set -- $BGP_NEIGHBORS
   idx=0
+  # Перебираем все соседи и логируем их без паролей 
   for triplet in "$@"; do
     idx=$((idx+1))
     ip=$(printf '%s' "$triplet" | awk -F',' '{print $1}')
@@ -122,15 +126,20 @@ log_vars() {
     log "NEIGHBOR[$idx]: ip=$ip asn=$asn pass=$(mask "$pass")"
   done
 }
-log_vars
-
+log_vars # Вызов функции логирования переменных
+   # Отмонтировать диск после выполнения всех операций
+    if mount | grep -q "on $CONTEXT_MOUNT "; then
+        umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOGBGP"
+    else
+        echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOGBGP"
+    fi
 # для безопасной подстановки пароля в PHP (экранируем одинарные кавычки)
 ESC_FRR_MASTER_PASS=$(printf "%s" "$FRR_MASTER_PASSWORD" | sed "s/'/\\\\'/g")
-
+# --- 1a) Basic validation -----------------------------------------------------
+# Проверяем, что BGP включён и заданы обязательные параметры 
 [ "$BGP_ENABLE" = "on" ] || { log "disabled by context"; return 0; }
 [ -n "$BGP_AS" ] && [ -n "$BGP_ROUTER_ID" ] || { log "BGP_AS or BGP_ROUTER_ID empty"; return 0; }
-
-# --- 1b) Detect changes in input variables ---------------------------------
+# Файл для хранения хэша состояния
 STATE_HASH_FILE="/var/run/context-bgp.hash"
 
 # Нормализуем списки (убираем повторы пробелов/точки с запятой, сортируем)
@@ -142,10 +151,7 @@ norm_nets=$(
   printf "%s" "$BGP_NETWORKS_TO_DISTRIBUTE" \
   | tr ';' ' ' | tr ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' '
 )
-
-# Считаем хэш от канонизированных значений
 # --- Считаем хэш от канонизированных значений (включая FRR global) ---------
-
 # универсальный фильтр хеширования из stdin
 sha256_q() {
   if command -v sha256 >/dev/null 2>&1; then
@@ -154,20 +160,15 @@ sha256_q() {
     openssl dgst -sha256 -r | awk '{print $1}'   # fallback
   fi
 }
-
 # Хэш от master-password (не храним пароль в чистом виде)
 mpw_sig=$(printf "%s" "${FRR_MASTER_PASSWORD}" | sha256_q)
-
 # Собираем «подпись» из всех важных переменных
 sig="${FRR_ENABLE}|${FRR_DEFAULT_ROUTER_ID}|${FRR_PASSWORD_ENCRYPT}|${mpw_sig}|\
 ${BGP_ENABLE}|${BGP_AS}|${BGP_ROUTER_ID}|${BGP_ADJACENCY_LOG}|\
 ${BGP_REDIST_CONNECTED}|${BGP_REDIST_STATIC}|${BGP_REDIST_KERNEL}|${BGP_RMAP_DEFAULT}|\
 ${norm_neighbors}|${norm_nets}"
-
 # Итоговый хэш
 new_hash=$(printf "%s" "$sig" | sha256_q)
-
-
 # Сравниваем с предыдущим
 if [ -f "$STATE_HASH_FILE" ]; then
   old_hash=$(cat "$STATE_HASH_FILE")
@@ -176,18 +177,20 @@ if [ -f "$STATE_HASH_FILE" ]; then
     return 0
   fi
 fi
-
+log "IM here"
 # Обновляем сохранённый хэш
 echo "$new_hash" > "$STATE_HASH_FILE"
-
-# --- 2) Build PHP neighbors array literal -----------------------------------
+# --- 2) Build PHP neighbors array literal -------------------------------------
+# Массив соседей для config.xml
 php_neighbors=""
 neighbors_list=$(printf "%s" "$BGP_NEIGHBORS" | tr ';' ' ')
+# Перебираем всех соседей и формируем PHP-массив для config.xml   
 for entry in $neighbors_list; do
   [ -z "$entry" ] && continue
   ip=$(printf "%s" "$entry" | awk -F, '{print $1}')
   asn=$(printf "%s" "$entry" | awk -F, '{print $2}')
   pwd=$(printf "%s" "$entry" | awk -F, '{print $3}')
+  # Пропускаем, если IP или ASN пустые
   [ -z "$ip" ] || [ -z "$asn" ] && continue
   php_neighbors="${php_neighbors}
   array(
@@ -200,10 +203,11 @@ for entry in $neighbors_list; do
     'routemap_out' => '${BGP_RMAP_DEFAULT}',
   ),"
 done
-
-# --- Build PHP array for "Networks to Distribute" ----------------------------
+# --- Build PHP array for "Networks to Distribute" -----------------------------
+# Массив сетей для config.xml
 php_networks=""
 nets_list=$(printf "%s" "$BGP_NETWORKS_TO_DISTRIBUTE" | tr ';' ' ')
+# Перебираем все сети и формируем PHP-массив для config.xml
 for entry in $nets_list; do
   [ -z "$entry" ] && continue
   net=$(printf "%s" "$entry" | awk -F, '{print $1}')
@@ -216,8 +220,8 @@ for entry in $nets_list; do
     'distributeroutemap'   => '${rmap}',
   ),"
 done
-
 # --- 3) Generate & run PHP one-shot -----------------------------------------
+# PHP скрипт для сохранения конфигурации в config.xml
 TMPPHP="/tmp/ContextBGP.$$.php"
 cat > "$TMPPHP" <<PHP
 <?php
@@ -246,14 +250,13 @@ if (!isset(\$config['installedpackages']['frr']['config'][0]) ||
     \$config['installedpackages']['frr']['config'][0] = array();
 }
 \$frr =& \$config['installedpackages']['frr']['config'][0];
-
+/* Обновляем только нужные параметры */
 \$frr['enable']   = '${FRR_ENABLE}';
 \$frr['routerid'] = '${FRR_DEFAULT_ROUTER_ID}';
 if ('${FRR_MASTER_PASSWORD}' !== '') {
     \$frr['password']        = '${ESC_FRR_MASTER_PASS}';
     \$frr['passwordencrypt'] = '${FRR_PASSWORD_ENCRYPT}';
 }
-
 
 /* Global route-map (default) */
 \$config['installedpackages']['frrglobalroutemaps']['config'][0] = array(
@@ -269,7 +272,7 @@ if (!isset(\$config['installedpackages']['frrbgp']['config'][0]) ||
 }
 \$bgp =& \$config['installedpackages']['frrbgp']['config'][0];
 
-\$bgp['enable']               = 'on';
+\$bgp['enable']               = '${BGP_ENABLE}';
 \$bgp['adjacencylog']         = '${BGP_ADJACENCY_LOG}';
 \$bgp['asnum']                = '${BGP_AS}';
 \$bgp['routerid']             = '${BGP_ROUTER_ID}';
@@ -290,91 +293,86 @@ if (!isset(\$config['installedpackages']['frrbgp']['config'][0]) ||
 write_config('Context: BGP from context variables');
 echo "Config.xml updated (apply via vtysh)\n";
 PHP
-
+# Запускаем PHP скрипт (логируем вывод)
 if ! "$PHPBIN" -d display_errors=1 "$TMPPHP" >>"$LOG" 2>&1; then
   log "PHP one-shot failed, see $LOG"
   rm -f "$TMPPHP"
   exit 255
 fi
-
+# Удаляем временный файл
 rm -f "$TMPPHP" 
 
-# --- 4) Apply via vtysh -----------------------------------------------------
+# --- 4) Apply via vtysh ---------------------------------------------------------
+# Применяем конфигурацию в FRR через vtysh (live-apply) 
 VTYSH="/usr/local/bin/vtysh"
-
+# Если vtysh отсутствует, пропускаем live-apply 
 if [ ! -x "$VTYSH" ]; then
   log "vtysh not found, skipping live FRR apply"
   return 0
 fi
-# Узнаём текущий AS в конфигурации FRR
+# Узнаём текущий AS в конфигурации FRR (если есть) 
 current_as=$($VTYSH -c "show running-config" | awk '/^router bgp/{print $3; exit}')
-
+# Если AS изменился, делаем полный сброс и пересоздание
 if [ "$current_as" != "$BGP_AS" ]; then
   log "BGP AS changed: $current_as -> $BGP_AS (full reset required)"
-
   # Полный сброс BGP, чтобы убрать старые сети/соседей
   $VTYSH -c "configure terminal" -c "no router bgp ${current_as}" >/dev/null 2>&1 || true
-
   # Создаём новый блок router bgp
   $VTYSH -c "configure terminal" \
          -c "router bgp ${BGP_AS}" \
          -c "bgp router-id ${BGP_ROUTER_ID}" >/dev/null
-
   # Добавляем сети
   for entry in $nets_list; do
     net=$(printf "%s" "$entry" | awk -F, '{print $1}')
     rmap=$(printf "%s" "$entry" | awk -F, '{print $2}')
     [ -z "$net" ] && continue
     [ -z "$rmap" ] && rmap="${BGP_RMAP_DEFAULT}"
-
+    # Добавляем сеть с route-map (если указано) 
     $VTYSH -c "configure terminal" \
            -c "router bgp ${BGP_AS}" \
            -c "address-family ipv4 unicast" \
            -c "network ${net} route-map ${rmap}" >/dev/null
   done
-
   # Добавляем соседей
   for entry in $neighbors_list; do
     ip=$(printf "%s" "$entry" | awk -F, '{print $1}')
     asn=$(printf "%s" "$entry" | awk -F, '{print $2}')
     pwd=$(printf "%s" "$entry" | awk -F, '{print $3}')
     [ -z "$ip" ] || [ -z "$asn" ] && continue
-
+    # Добавляем соседа с параметрами из config.xml 
     cmds="-c \"router bgp ${BGP_AS}\" \
           -c \"neighbor ${ip} remote-as ${asn}\" \
           -c \"neighbor ${ip} route-map ${BGP_RMAP_DEFAULT} in\" \
           -c \"neighbor ${ip} route-map ${BGP_RMAP_DEFAULT} out\""
-
+    # Добавляем пароль, если указан 
     if [ -n "$pwd" ]; then
       cmds="$cmds -c \"neighbor ${ip} password ${pwd}\""
     fi
-
+    # Выполняем команды в vtysh для данного соседа 
     eval $VTYSH -c "configure terminal" "$cmds" >/dev/null
   done
-
   log "BGP full reset and reconfigure applied"
 else
   log "BGP AS unchanged (${BGP_AS}), running incremental sync"
   # здесь вызывается diff-mode блок для сетей и соседей,
   # который мы писали выше (удаляем лишние, добавляем недостающие)
-
+  
   # --- Сети (добавление/удаление с учётом route-map) ---
+  # Файл для хранения состояния сетей (чтобы не дергать FRR без нужды)
   STATE_NET_FILE="/var/run/context-bgp.nets"
-
   # нормализуем список из переменной (сортировка, убираем пустые строки)
   norm_nets=$(
     printf "%s" "$BGP_NETWORKS_TO_DISTRIBUTE" \
     | tr ';' ' ' | tr ' ' '\n' | sed '/^$/d' | sort
   )
-
-  # читаем старое состояние
+  # читаем старое состояние из state-файла (если оно есть)
   old_nets=""
   [ -f "$STATE_NET_FILE" ] && old_nets=$(cat "$STATE_NET_FILE")
   current_nets=$(
     $VTYSH -c "show running-config" \
     | awk '/^ address-family ipv4 unicast/{flag=1;next} /^ exit-address-family/{flag=0} flag && /^  network/{print $2 ( ($4!="") ? ","$4 : "" )}'
   )
-
+  # если переменная для сетей не изменилась с прошлого раза → пропускаем
   if [ "$norm_nets" = "$old_nets" ]; then
     log "No changes in BGP networks, skipping"
   else
@@ -382,6 +380,7 @@ else
     # Удаляем лишние (или с другим route-map)
     for netline in $current_nets; do
       found=false
+      # Ищем текущую сеть в списке желаемых сетей 
       for entry in $nets_list; do
         net=$(echo "$entry" | awk -F, '{print $1}')
         rmap=$(echo "$entry" | awk -F, '{print $2}')
@@ -391,6 +390,7 @@ else
           break
         fi
       done
+      # Если не нашли эту сеть в желаемых → удаляем из FRR
       if [ "$found" = false ]; then
         net=$(echo "$netline" | cut -d, -f1)
         $VTYSH -c "configure terminal" \
@@ -400,14 +400,14 @@ else
         log "Removed obsolete or mismatched network ${net} (${netline})"
       fi
     done
-  # Добавляем недостающие
+  # Добавляем недостающие сети (или с другим route-map)
   for entry in $nets_list; do
     net=$(echo "$entry" | awk -F, '{print $1}')
     rmap=$(echo "$entry" | awk -F, '{print $2}')
     [ -z "$net" ] && continue
     [ -z "$rmap" ] && rmap="${BGP_RMAP_DEFAULT}"
     echo "$current_nets" | grep -q "^${net},${rmap}$" || {
-      # Если сеть есть, но с другим route-map → сначала удаляем
+      # Если сеть есть, но с другим route-map → сначала удаляем старую 
       echo "$current_nets" | grep -q "^${net}," && {
         $VTYSH -c "configure terminal" \
                -c "router bgp ${BGP_AS}" \
@@ -415,7 +415,7 @@ else
                -c "no network ${net}" >/dev/null
         log "Replaced network ${net} with new route-map ${rmap}"
       }
-      # Теперь добавляем
+      # Теперь добавляем новую сеть с нужным route-map 
       $VTYSH -c "configure terminal" \
              -c "router bgp ${BGP_AS}" \
              -c "address-family ipv4 unicast" \
@@ -424,23 +424,23 @@ else
     }
   done
   fi
-# --- Router ID ---
+# --- Router ID --- -------------------------------------------------------------
+# Файл для хранения состояния router-id (чтобы не дергать FRR без нужды)
 STATE_RID_FILE="/var/run/context-bgp.routerid"
 # читаем предыдущее значение из state-файла (если оно есть)
 old_routerid=""
 [ -f "$STATE_RID_FILE" ] && old_routerid=$(cat "$STATE_RID_FILE")
-# если переменная не изменилась с прошлого раза → пропускаем
+# если переменная не изменилась с прошлого раза → пропускаем чтобы не дергать FRR
 if [ "$old_routerid" = "$BGP_ROUTER_ID" ]; then
   log "No changes in Router-ID ($BGP_ROUTER_ID), skipping"
 else
   echo "$BGP_ROUTER_ID" > "$STATE_RID_FILE"
-
   # узнаём фактический router-id из running-config
   current_routerid=$(
     $VTYSH -c "show running-config" \
     | awk '/^ router bgp /{flag=1;next} /^ !/{flag=0} flag && /^ bgp router-id/{print $3}'
   )
-
+# если router-id отличается → меняем его в FRR на лету  
   if [ "$current_routerid" != "$BGP_ROUTER_ID" ]; then
     $VTYSH -c "configure terminal" \
            -c "router bgp ${BGP_AS}" \
@@ -452,16 +452,17 @@ else
   fi
 fi
   # --- Соседи (добавление/удаление с проверкой ASN и password) ---
+  # Файл для хранения состояния соседей (чтобы не дергать FRR без нужды)
   STATE_NEIGH_FILE="/var/run/context-bgp.neigh"
   # Нормализуем список соседей (сортировка, убираем дубликаты)
   norm_neighbors=$(printf "%s" "$neighbors_list" | tr ' ' '\n' | sort | tr '\n' ' ')
-
+  # Читаем старое состояние из state-файла (если оно есть)
   if [ -f "$STATE_NEIGH_FILE" ]; then
     old_neighbors=$(cat "$STATE_NEIGH_FILE")
   else
     old_neighbors=""
   fi
-
+  # если переменная для соседей не изменилась с прошлого раза → пропускаем чтобы  не дергать FRR
   if [ "$norm_neighbors" = "$old_neighbors" ]; then
     log "No changes in neighbors, skipping neighbor reconfiguration"
   else
@@ -470,19 +471,22 @@ fi
     $VTYSH -c "show running-config" \
     | awk '/^ neighbor / && /remote-as/ {print $2 "," $4}'
     )
-    # Удаляем лишних
+    # Удаляем лишних (или с другим ASN) 
     for neigh in $current_neighbors; do
       ip=$(echo "$neigh" | cut -d, -f1)
       asn=$(echo "$neigh" | cut -d, -f2)
       found=false
+      # Ищем текущего соседа в списке желаемых соседей
       for entry in $neighbors_list; do
         n_ip=$(echo "$entry" | awk -F, '{print $1}')
         n_asn=$(echo "$entry" | awk -F, '{print $2}')
+        # Если нашли соседа с таким же IP и ASN → оставляем его для текущего прохода  
         if [ "$ip" = "$n_ip" ] && [ "$asn" = "$n_asn" ]; then
           found=true
           break
         fi
       done
+      # Если не нашли этого соседа в желаемых → удаляем из FRR чтобы не было конфликтов
       if [ "$found" = false ]; then
         $VTYSH -c "configure terminal" \
                -c "router bgp ${BGP_AS}" \
@@ -490,14 +494,14 @@ fi
         log "Removed obsolete neighbor ${ip} (ASN $asn)"
       fi
     done
-    # Добавляем/обновляем
+    # Добавляем/обновляем недостающих соседей (или с другим ASN/password)
     for entry in $neighbors_list; do
       ip=$(echo "$entry" | awk -F, '{print $1}')
       asn=$(echo "$entry" | awk -F, '{print $2}')
       pwd=$(echo "$entry" | awk -F, '{print $3}')
-      # Проверяем ASN
+      # Проверяем ASN (если сосед с таким IP есть, но ASN другой → пересоздаём)
       if ! echo "$current_neighbors" | grep -q "^${ip},${asn}$"; then
-        # Сосед отсутствует или ASN другой → пересоздаём
+        # Сосед отсутствует или ASN другой → пересоздаём соседа в FRR чтобы не было конфликтов
         $VTYSH -c "configure terminal" \
                -c "router bgp ${BGP_AS}" \
                -c "no neighbor ${ip}" >/dev/null 2>&1 || true
@@ -520,5 +524,4 @@ fi
              -c "neighbor ${ip} route-map ${BGP_RMAP_DEFAULT} out" >/dev/null
       done     
   fi 
-
-fi
+fi 
