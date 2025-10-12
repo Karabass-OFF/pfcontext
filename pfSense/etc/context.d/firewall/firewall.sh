@@ -17,6 +17,9 @@ CONTEXT_FW_WORKDIR=${CONTEXT_FW_WORKDIR:-/var/run}
 
 . "$SCRIPT_DIR/functions.sh"
 . "$SCRIPT_DIR/vars.sh"
+. "$SCRIPT_DIR/mod_nat.sh"
+. "$SCRIPT_DIR/mod_dnat.sh"
+. "$SCRIPT_DIR/mod_forward.sh"
 
 main()
 {
