@@ -13,7 +13,7 @@
 list_lan_interfaces()
 {
     work_xml=$1
-    xml sel -t -m "//interfaces/*" -v "concat(name(),'|',if,'|',descr)" -n "$work_xml" 2>/dev/null |
+    xml_select -t -m "//interfaces/*" -v "concat(name(),'|',if,'|',descr)" -n "$work_xml" 2>/dev/null |
         while IFS='|' read -r ifname ifdev ifdescr; do
             ifdescr_lc=$(printf '%s' "$ifdescr" | tr '[:upper:]' '[:lower:]')
             if [ "${ifdescr_lc#*wan}" != "$ifdescr_lc" ]; then
@@ -31,7 +31,7 @@ fail_safe_check()
     work_xml=$1
     lan_list=$2
     for lan in $lan_list; do
-        suspicious=$(xml sel -t -m "//filter/rule[type='pass' and interface='$lan' and not(starts-with(descr,'$CONTEXT_FW_PREFIX'))]" -v "descr" -n "$work_xml" 2>/dev/null)
+        suspicious=$(xml_select -t -m "//filter/rule[type='pass' and interface='$lan' and not(starts-with(descr,'$CONTEXT_FW_PREFIX'))]" -v "descr" -n "$work_xml" 2>/dev/null)
         if [ -n "$suspicious" ]; then
             log_warn "Fail-safe: found non-context pass rule on $lan: $suspicious"
         fi
@@ -41,7 +41,7 @@ fail_safe_check()
 clear_context_forward_rules()
 {
     work_xml=$1
-    xml ed -L -d "//filter/rule[starts-with(descr,'$CONTEXT_FW_PREFIX') and not(starts-with(descr,'$CONTEXT_FW_PREFIX DNAT allow'))]" "$work_xml" 2>/dev/null || true
+    xml_edit -L -d "//filter/rule[starts-with(descr,'$CONTEXT_FW_PREFIX') and not(starts-with(descr,'$CONTEXT_FW_PREFIX DNAT allow'))]" "$work_xml" 2>/dev/null || true
 }
 
 append_filter_rule()
@@ -56,7 +56,7 @@ append_filter_rule()
     dst_value=$8
     descr=$9
 
-    xml ed -L \
+    xml_edit -L \
         -s "//filter" -t elem -n "ruleTMP" -v "" \
         -s "//filter/ruleTMP" -t elem -n "type" -v "$type" \
         -s "//filter/ruleTMP" -t elem -n "interface" -v "$interface" \
@@ -66,21 +66,21 @@ append_filter_rule()
         "$work_xml" >/dev/null
 
     case $src_type in
-        any) xml ed -L -s "//filter/ruleTMP/source" -t elem -n "any" -v "" "$work_xml" >/dev/null ;;
-        network) xml ed -L -s "//filter/ruleTMP/source" -t elem -n "network" -v "$src_value" "$work_xml" >/dev/null ;;
-        address) xml ed -L -s "//filter/ruleTMP/source" -t elem -n "address" -v "$src_value" "$work_xml" >/dev/null ;;
-        alias) xml ed -L -s "//filter/ruleTMP/source" -t elem -n "address" -v "$src_value" "$work_xml" >/dev/null ;;
+        any) xml_edit -L -s "//filter/ruleTMP/source" -t elem -n "any" -v "" "$work_xml" >/dev/null ;;
+        network) xml_edit -L -s "//filter/ruleTMP/source" -t elem -n "network" -v "$src_value" "$work_xml" >/dev/null ;;
+        address) xml_edit -L -s "//filter/ruleTMP/source" -t elem -n "address" -v "$src_value" "$work_xml" >/dev/null ;;
+        alias) xml_edit -L -s "//filter/ruleTMP/source" -t elem -n "address" -v "$src_value" "$work_xml" >/dev/null ;;
     esac
 
-    xml ed -L -s "//filter/ruleTMP" -t elem -n "destination" -v "" "$work_xml" >/dev/null
+    xml_edit -L -s "//filter/ruleTMP" -t elem -n "destination" -v "" "$work_xml" >/dev/null
     case $dst_type in
-        any) xml ed -L -s "//filter/ruleTMP/destination" -t elem -n "any" -v "" "$work_xml" >/dev/null ;;
-        network) xml ed -L -s "//filter/ruleTMP/destination" -t elem -n "network" -v "$dst_value" "$work_xml" >/dev/null ;;
-        address) xml ed -L -s "//filter/ruleTMP/destination" -t elem -n "address" -v "$dst_value" "$work_xml" >/dev/null ;;
-        alias) xml ed -L -s "//filter/ruleTMP/destination" -t elem -n "address" -v "$dst_value" "$work_xml" >/dev/null ;;
+        any) xml_edit -L -s "//filter/ruleTMP/destination" -t elem -n "any" -v "" "$work_xml" >/dev/null ;;
+        network) xml_edit -L -s "//filter/ruleTMP/destination" -t elem -n "network" -v "$dst_value" "$work_xml" >/dev/null ;;
+        address) xml_edit -L -s "//filter/ruleTMP/destination" -t elem -n "address" -v "$dst_value" "$work_xml" >/dev/null ;;
+        alias) xml_edit -L -s "//filter/ruleTMP/destination" -t elem -n "address" -v "$dst_value" "$work_xml" >/dev/null ;;
     esac
 
-    xml ed -L -r "//filter/ruleTMP" -v "rule" "$work_xml" >/dev/null
+    xml_edit -L -r "//filter/ruleTMP" -v "rule" "$work_xml" >/dev/null
 }
 
 apply_forward_module()

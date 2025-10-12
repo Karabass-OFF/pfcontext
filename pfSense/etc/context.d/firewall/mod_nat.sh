@@ -20,12 +20,12 @@ add_or_replace_alias()
 
     [ -n "$alias_content" ] || {
         log_debug "Alias $alias_name empty — removing if exists"
-        xml ed -L -d "//aliases/alias[name='$alias_name']" "$work_xml" 2>/dev/null || true
+        xml_edit -L -d "//aliases/alias[name='$alias_name']" "$work_xml" 2>/dev/null || true
         return 0
     }
 
-    xml ed -L -d "//aliases/alias[name='$alias_name']" "$work_xml" 2>/dev/null || true
-    xml ed -L \
+    xml_edit -L -d "//aliases/alias[name='$alias_name']" "$work_xml" 2>/dev/null || true
+    xml_edit -L \
         -s "//aliases" -t elem -n "aliasTMP" -v "" \
         -s "//aliases/aliasTMP" -t elem -n "name" -v "$alias_name" \
         -s "//aliases/aliasTMP" -t elem -n "type" -v "$alias_type" \
@@ -38,7 +38,7 @@ add_or_replace_alias()
 clear_context_outbound_rules()
 {
     work_xml=$1
-    xml ed -L -d "//nat/outbound/rule[starts-with(descr,'$CONTEXT_FW_PREFIX')]" "$work_xml" 2>/dev/null || true
+    xml_edit -L -d "//nat/outbound/rule[starts-with(descr,'$CONTEXT_FW_PREFIX')]" "$work_xml" 2>/dev/null || true
 }
 
 append_outbound_rule()
@@ -48,7 +48,7 @@ append_outbound_rule()
     source_type=$3
     descr=$4
 
-    xml ed -L \
+    xml_edit -L \
         -s "//nat/outbound" -t elem -n "ruleTMP" -v "" \
         -s "//nat/outbound/ruleTMP" -t elem -n "interface" -v "$FIREWALL_NAT_OUT_IF" \
         -s "//nat/outbound/ruleTMP" -t elem -n "protocol" -v "any" \
@@ -69,9 +69,9 @@ configure_outbound_nat()
         return 0
     fi
 
-    xml ed -L -u "//nat/outbound/mode" -v "advanced" "$work_xml" 2>/dev/null || {
+    xml_edit -L -u "//nat/outbound/mode" -v "advanced" "$work_xml" 2>/dev/null || {
         # Ensure mode node exists
-        xml ed -L -s "//nat/outbound" -t elem -n "mode" -v "advanced" "$work_xml" >/dev/null
+        xml_edit -L -s "//nat/outbound" -t elem -n "mode" -v "advanced" "$work_xml" >/dev/null
     }
 
     clear_context_outbound_rules "$work_xml"

@@ -12,8 +12,8 @@
 clear_context_portforwards()
 {
     work_xml=$1
-    xml ed -L -d "//nat/rule[starts-with(descr,'$CONTEXT_FW_PREFIX')]" "$work_xml" 2>/dev/null || true
-    xml ed -L -d "//filter/rule[starts-with(descr,'$CONTEXT_FW_PREFIX DNAT allow')]" "$work_xml" 2>/dev/null || true
+    xml_edit -L -d "//nat/rule[starts-with(descr,'$CONTEXT_FW_PREFIX')]" "$work_xml" 2>/dev/null || true
+    xml_edit -L -d "//filter/rule[starts-with(descr,'$CONTEXT_FW_PREFIX DNAT allow')]" "$work_xml" 2>/dev/null || true
 }
 
 append_destination()
@@ -24,12 +24,12 @@ append_destination()
     work_xml=$4
 
     if [ -n "$address" ]; then
-        xml ed -L -s "$rule_path" -t elem -n "address" -v "$address" "$work_xml" >/dev/null
+        xml_edit -L -s "$rule_path" -t elem -n "address" -v "$address" "$work_xml" >/dev/null
     else
-        xml ed -L -s "$rule_path" -t elem -n "any" -v "" "$work_xml" >/dev/null
+        xml_edit -L -s "$rule_path" -t elem -n "any" -v "" "$work_xml" >/dev/null
     fi
     if [ -n "$port" ]; then
-        xml ed -L -s "$rule_path" -t elem -n "port" -v "$port" "$work_xml" >/dev/null
+        xml_edit -L -s "$rule_path" -t elem -n "port" -v "$port" "$work_xml" >/dev/null
     fi
 }
 
@@ -48,7 +48,7 @@ append_portforward_rule()
     disabled=${11}
 
     full_descr="$CONTEXT_FW_PREFIX DNAT ${descr}"
-    xml ed -L \
+    xml_edit -L \
         -s "//nat" -t elem -n "ruleTMP" -v "" \
         -s "//nat/ruleTMP" -t elem -n "interface" -v "$if_name" \
         -s "//nat/ruleTMP" -t elem -n "protocol" -v "$proto" \
@@ -68,30 +68,30 @@ append_portforward_rule()
 
     append_destination "$dest_path" "$dest_value" "$ext_port" "$work_xml"
 
-    xml ed -L \
+    xml_edit -L \
         -s "//nat/ruleTMP" -t elem -n "target" -v "$int_ip" \
         -s "//nat/ruleTMP" -t elem -n "local-port" -v "$int_port" \
         -s "//nat/ruleTMP" -t elem -n "descr" -v "$full_descr" \
         "$work_xml" >/dev/null
 
-    [ "$reflection" = "on" ] && xml ed -L -s "//nat/ruleTMP" -t elem -n "natreflection" -v "enable" "$work_xml" >/dev/null
-    [ "$disabled" = "on" ] && xml ed -L -s "//nat/ruleTMP" -t elem -n "disabled" -v "" "$work_xml" >/dev/null
+    [ "$reflection" = "on" ] && xml_edit -L -s "//nat/ruleTMP" -t elem -n "natreflection" -v "enable" "$work_xml" >/dev/null
+    [ "$disabled" = "on" ] && xml_edit -L -s "//nat/ruleTMP" -t elem -n "disabled" -v "" "$work_xml" >/dev/null
 
     if [ "$assoc_rule" = "on" ]; then
-        xml ed -L \
+        xml_edit -L \
             -s "//nat/ruleTMP" -t elem -n "associated-rule" -v "pass" \
             "$work_xml" >/dev/null
     else
-        xml ed -L \
+        xml_edit -L \
             -s "//nat/ruleTMP" -t elem -n "associated-rule" -v "disabled" \
             "$work_xml" >/dev/null
     fi
 
-    xml ed -L -r "//nat/ruleTMP" -v "rule" "$work_xml" >/dev/null
+    xml_edit -L -r "//nat/ruleTMP" -v "rule" "$work_xml" >/dev/null
 
     if [ "$assoc_rule" = "on" ]; then
         filter_descr="$CONTEXT_FW_PREFIX DNAT allow ${descr}"
-        xml ed -L \
+        xml_edit -L \
             -s "//filter" -t elem -n "ruleTMP" -v "" \
             -s "//filter/ruleTMP" -t elem -n "type" -v "pass" \
             -s "//filter/ruleTMP" -t elem -n "interface" -v "$if_name" \
@@ -102,8 +102,8 @@ append_portforward_rule()
             -s "//filter/ruleTMP" -t elem -n "destination" -v "" \
             "$work_xml" >/dev/null
         append_destination "//filter/ruleTMP/destination" "$int_ip" "$int_port" "$work_xml"
-        [ "$disabled" = "on" ] && xml ed -L -s "//filter/ruleTMP" -t elem -n "disabled" -v "" "$work_xml" >/dev/null
-        xml ed -L -r "//filter/ruleTMP" -v "rule" "$work_xml" >/dev/null
+        [ "$disabled" = "on" ] && xml_edit -L -s "//filter/ruleTMP" -t elem -n "disabled" -v "" "$work_xml" >/dev/null
+        xml_edit -L -r "//filter/ruleTMP" -v "rule" "$work_xml" >/dev/null
     fi
 }
 
@@ -148,7 +148,18 @@ apply_dnat_module()
         [ -n "$int_ip" ] || { log_warn "DNAT entry missing int_ip: $entry"; continue; }
         [ -n "$int_port" ] || { log_warn "DNAT entry missing int_port: $entry"; continue; }
 
-        append_portforward_rule "$work_xml" "$if_name" "$proto" "$ext_addr" "$ext_port" "$int_ip" "$int_port" "$descr" "$assoc_rule" "$reflection" "$disabled"
+        append_portforward_rule \
+            "$work_xml" \
+            "$if_name" \
+            "$proto" \
+            "$ext_addr" \
+            "$ext_port" \
+            "$int_ip" \
+            "$int_port" \
+            "$descr" \
+            "$assoc_rule" \
+            "$reflection" \
+            "$disabled"
         log_info "DNAT rule applied for $descr"
     done
 }
