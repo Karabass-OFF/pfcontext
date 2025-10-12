@@ -148,7 +148,18 @@ apply_dnat_module()
         [ -n "$int_ip" ] || { log_warn "DNAT entry missing int_ip: $entry"; continue; }
         [ -n "$int_port" ] || { log_warn "DNAT entry missing int_port: $entry"; continue; }
 
-        append_portforward_rule "$work_xml" "$if_name" "$proto" "$ext_addr" "$ext_port" "$int_ip" "$int_port" "$descr" "$assoc_rule" "$reflection" "$disabled"
+        append_portforward_rule \
+            "$work_xml" \
+            "$if_name" \
+            "$proto" \
+            "$ext_addr" \
+            "$ext_port" \
+            "$int_ip" \
+            "$int_port" \
+            "$descr" \
+            "$assoc_rule" \
+            "$reflection" \
+            "$disabled"
         log_info "DNAT rule applied for $descr"
     done
 }
