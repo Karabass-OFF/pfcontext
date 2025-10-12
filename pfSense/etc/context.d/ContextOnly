@@ -374,6 +374,17 @@ else
     pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
     echo "$(date) [context] Admin password changed" >> "$LOG"
 fi
+# --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
+# Firewall automation module
+if [ -x /etc/context.d/firewall/firewall.sh ]; then
+    echo "$(date) [context] Running firewall module /etc/context.d/firewall/firewall.sh" >> "$LOG"
+    if /etc/context.d/firewall/firewall.sh >> "$LOG" 2>&1; then
+        echo "$(date) [context] Firewall module completed" >> "$LOG"
+    else
+        rc=$?
+        echo "$(date) [context] Firewall module failed (code $rc)" >> "$LOG"
+    fi
+fi
 # Отмонтировать диск после выполнения всех операций
 if mount | grep -q "on $CONTEXT_MOUNT "; then
     umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
