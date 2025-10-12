@@ -27,6 +27,8 @@ main()
 
     if [ "$FIREWALL_LOG" = "off" ]; then
         CONTEXT_FW_LOG=/dev/null
+    else
+        ensure_log_file "$CONTEXT_FW_LOG"
     fi
 
     if [ "$CONTEXT_FW_DEBUG" = "on" ]; then
@@ -52,7 +54,8 @@ main()
         exit 0
     fi
 
-    require_cmd xml
+    detect_xml_tool
+    log_info "Using XML tool: $CONTEXT_FW_XML_BIN"
 
     backup_xml=${backup_xml_file:-/cf/conf/config.xml}
     if [ ! -f "$backup_xml" ]; then

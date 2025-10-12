@@ -15,11 +15,32 @@
 : "${CONTEXT_FW_LOCK:=/var/run/context-firewall.lock}"
 : "${CONTEXT_FW_WORKDIR:=/var/run}"
 : "${CONTEXT_FW_DEBUG:=off}"
+: "${CONTEXT_FW_STDERR:=auto}"
+: "${CONTEXT_FW_XML_BIN:=}"
 
 # shellcheck shell=sh disable=SC2039
 umask 077
-mkdir -p "$(dirname "$CONTEXT_FW_LOG")" >/dev/null 2>&1 || true
 mkdir -p "$CONTEXT_FW_WORKDIR" >/dev/null 2>&1 || true
+
+ensure_log_file()
+{
+    target=$1
+    dir=$(dirname "$target")
+    if ! mkdir -p "$dir" >/dev/null 2>&1; then
+        echo "ContextFW: cannot create log directory $dir" >&2
+        target=/tmp/context-firewall.log
+        mkdir -p /tmp >/dev/null 2>&1 || true
+    fi
+
+    if ! touch "$target" >/dev/null 2>&1; then
+        echo "ContextFW: cannot write to $1, switching to /tmp/context-firewall.log" >&2
+        target=/tmp/context-firewall.log
+        mkdir -p /tmp >/dev/null 2>&1 || true
+        touch "$target" >/dev/null 2>&1 || true
+    fi
+
+    CONTEXT_FW_LOG=$target
+}
 
 log_ts()
 {
@@ -34,7 +55,22 @@ log()
     if [ "$CONTEXT_FW_DEBUG" = "on" ]; then
         prefix="[DEBUG]$prefix"
     fi
-    printf '%s %s %s\n' "$(log_ts)" "$prefix" "$*" >>"$CONTEXT_FW_LOG"
+    message=$(printf '%s %s %s' "$(log_ts)" "$prefix" "$*")
+    if ! printf '%s\n' "$message" >>"$CONTEXT_FW_LOG" 2>/dev/null; then
+        printf '%s\n' "$message" >&2
+        return
+    fi
+
+    case $CONTEXT_FW_STDERR in
+        on)
+            printf '%s\n' "$message" >&2
+            ;;
+        auto)
+            if [ -t 2 ]; then
+                printf '%s\n' "$message" >&2
+            fi
+            ;;
+    esac
 }
 
 log_info()
@@ -127,6 +163,32 @@ compute_hash()
 {
     data=$1
     printf '%s' "$data" | cksum | awk '{print $1}'
+}
+
+detect_xml_tool()
+{
+    if [ -n "$CONTEXT_FW_XML_BIN" ] && command -v "$CONTEXT_FW_XML_BIN" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    for candidate in ${CONTEXT_FW_XML_CANDIDATES:-xml xmlstarlet}; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            CONTEXT_FW_XML_BIN=$(command -v "$candidate")
+            return 0
+        fi
+    done
+
+    fatal "Required command 'xml' (xmlstarlet) not found"
+}
+
+xml_edit()
+{
+    "$CONTEXT_FW_XML_BIN" ed "$@"
+}
+
+xml_select()
+{
+    "$CONTEXT_FW_XML_BIN" sel "$@"
 }
 
 ensure_work_copy()
