@@ -5,8 +5,6 @@ set -eu
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 export PATH
 
-SCRIPT_NAME="context-firewall"
-SCRIPT_PATH="/etc/context.d/firewall/firewall.sh"
 SCRIPT_MODE="executed"
 case "${0##*/}" in
   firewall.sh) SCRIPT_MODE="executed" ;;
@@ -31,7 +29,6 @@ FIREWALL_ENABLE="${FIREWALL_ENABLE:-off}"
 FIREWALL_PFCTL="${FIREWALL_PFCTL:-on}"
 FIREWALL_RELOAD="${FIREWALL_RELOAD:-auto}"
 
-EXIT_STATUS=0
 
 # --- 2) Common functions -----------------------------------------
 

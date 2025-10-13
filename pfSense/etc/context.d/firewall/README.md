@@ -1,107 +1,110 @@
 # Context Firewall Module for pfSense 2.8 (OpenNebula)
 
-`firewall.sh` — дополнительный модуль контекста, который выполняется из `ContextOnly` после настройки интерфейсов. Скрипт управляет только теми элементами `config.xml`, чьи описания начинаются с префикса `ContextFW:`; все остальные правила, созданные через GUI/VPN/DHCP, остаются неизменными.
+`firewall.sh` — модуль контекста для **pfSense 2.8-RELEASE**, выполняемый из `ContextOnly` после настройки сетевых интерфейсов.  
+Скрипт управляет только теми элементами `config.xml`, чьи описания начинаются с префикса `ContextFW:`;  
+все остальные правила, созданные вручную (через GUI, VPN, DHCP и т.д.), остаются без изменений.
 
-## Структура скрипта
-Сценарий разбит на логические блоки с явными заголовками:
+---
 
-1. **Entry point** — проверка зависимостей (`pfctl`, `php`, `xml`, `pfSsh.php`), установка блокировки `/var/run/context-firewall.lock` (TTL 10 минут) и подготовка окружения.
-2. **Load variables** — загрузка переменных из `context.sh`, проверка флагов `FIREWALL_ENABLE` и `FIREWALL_PFCTL`, подготовка рабочей копии `config.xml` (используется backup, созданный `ContextOnly`).
-3. **Common functions** — журналирование (`/var/log/context-firewall.log`), резервное копирование (`/cf/conf/backup/config.xml.firewall.*`), откат, вычисление хэшей состояния, вспомогательные утилиты.
-4. **NAT / outbound NAT** — подготовка данных для исходящего NAT и правил `nonat`.
-5. **DNAT / Port Forwards** — парсинг `FIREWALL_PORT_FORWARD_LIST`, поддержка флага `assoc_rule` и связанных правил фильтрации.
-6. **Forward rules** — генерация правил `pass`/`block` по спискам интерфейсов, IP-адресов и сетей блокировки.
-7. **Validation & Apply** — применение изменений в рабочей копии, генерация `/tmp/rules.debug` через `php /etc/rc.filter_configure_sync`, проверка `pfctl -nf`, атомарный `mv` в `/cf/conf/config.xml`, запуск `pfSsh.php playback reloadfilter` (или пропуск в режиме manual), управление состоянием (`/var/run/context-firewall.state`) и откат при ошибках.
+## 📁 Структура скрипта
 
-## Контекстные переменные
-Пример содержимого `context.sh` для активации модуля:
+1. **Entry point**  
+   Проверка зависимостей (`pfctl`, `php`, `xml`, `pfSsh.php`), установка блокировки `/var/run/context-firewall.lock` (TTL 600 с), подготовка окружения.
 
-```sh
+2. **Load variables**  
+   Загрузка переменных из `/mnt/context/context.sh` (CD-ROM OpenNebula), проверка флагов `FIREWALL_ENABLE` и `FIREWALL_PFCTL`, создание рабочей копии `config.xml` (используется backup от `ContextOnly`).
+
+3. **Common functions**  
+   Журналирование (`/var/log/context-firewall.log`), резервное копирование (`/cf/conf/backup/config.xml.firewall.*`), восстановление (`rollback`), хэширование состояния (`/var/run/context-firewall.state`), вспомогательные утилиты.
+
+4. **NAT / Outbound NAT**  
+   Формирование правил исходящего NAT и `nonat` на основе переменных `FIREWALL_NAT_*`.
+
+5. **DNAT / Port Forwards**  
+   Парсинг `FIREWALL_PORT_FORWARD_LIST`, генерация DNAT-правил и связанных фильтров (`assoc_rule=pass`).
+
+6. **Forward Rules / Filters**  
+   Создание `pass` / `block` правил по спискам интерфейсов, IP-адресов и сетей блокировки.
+
+7. **Validation & Apply**  
+   Проверка изменений, вызов `php /etc/rc.filter_configure_sync` для генерации `/tmp/rules.debug`, валидация через `pfctl -nf`, атомарное обновление `config.xml`, вызов `pfSsh.php playback reloadfilter` (или пропуск при `manual`), сохранение состояния.
+
+---
+
+## ⚙️ Контекстные переменные (`context.sh`)
+
+Ниже приведён полный список переменных, поддерживаемых модулем, и их описание.  
+Все значения читаются из `/mnt/context/context.sh` (CD-ROM OpenNebula).
+
+| Переменная | Возможные значения | Назначение |
+|-------------|--------------------|-------------|
+| **FIREWALL_ENABLE** | `on` / `off` | Включение или отключение модуля. |
+| **FIREWALL_PFCTL** | `on` / `off` | Применять ли изменения через `pfctl`. |
+| **FIREWALL_RELOAD** | `auto` / `manual` | Режим перезагрузки после применения. |
+| **FIREWALL_DEBUG** | `on` / `off` | Подробный отладочный вывод. |
+| **FIREWALL_LOG** | `on` / `off` | Добавлять флаг логирования (`log`) в правила. |
+| **FIREWALL_DEFAULT_FORWARD** | `allow` / `deny` | Поведение по умолчанию для входящего трафика. |
+| **FIREWALL_NAT_OUT_IF** | имя интерфейса (например, `wan`) | Интерфейс для исходящего NAT. |
+| **FIREWALL_NAT_NETS** | список CIDR (через пробел, запятую или `;`) | Сети, для которых создаются NAT-правила. |
+| **FIREWALL_NAT_HOSTS** | список IP | Отдельные хосты для исходящего NAT. |
+| **FIREWALL_NAT_ALLOW_NETS** | список CIDR | Сети, **исключаемые** из NAT (`nonat`). |
+| **FIREWALL_BLOCK_NETS** | список CIDR | Сети, которые блокируются на входе (WAN). |
+| **FIREWALL_FORWARD_ALLOW_IF** | список интерфейсов | Разрешить трафик с указанных интерфейсов. |
+| **FIREWALL_FORWARD_ALLOW_IP** | список IP | Разрешить трафик с указанных IP-адресов. |
+| **FIREWALL_PORT_FORWARD_LIST** | строка с DNAT-записями | Правила проброса портов (см. ниже). |
+
+---
+
+### 🔀 Формат `FIREWALL_PORT_FORWARD_LIST`
+
+Правила указываются через `;`. Каждое правило — набор пар `ключ=значение`, разделённых запятыми:
+
+```bash
+FIREWALL_PORT_FORWARD_LIST="\
+if=wan,proto=tcp,ext_addr=wanaddress,ext_port=443,int_ip=192.168.10.2,int_port=443,descr=HTTPS,assoc_rule=pass;\
+if=wan,proto=udp,ext_port=1194,int_ip=192.168.10.3,int_port=1194,descr=OpenVPN"
+
+---
+
+### Пример context.sh
+
+```bash
+# Enable context firewall
 FIREWALL_ENABLE="on"
-FIREWALL_DEBUG="off"
 FIREWALL_PFCTL="on"
-FIREWALL_RELOAD="auto"        # auto | manual
+FIREWALL_RELOAD="auto"
+FIREWALL_DEBUG="off"
 FIREWALL_LOG="on"
 FIREWALL_DEFAULT_FORWARD="deny"
 
+# Outbound NAT
 FIREWALL_NAT_OUT_IF="vtnet0"
-FIREWALL_NAT_NETS="192.168.0.0/16 10.0.0.0/8"
-FIREWALL_NAT_HOSTS="192.168.10.5 192.168.10.6"
-FIREWALL_NAT_ALLOW_NETS="192.168.0.0/16"
+FIREWALL_NAT_NETS="10.0.0.0/8,192.168.0.0/16"
+FIREWALL_NAT_HOSTS="10.0.0.5"
+FIREWALL_NAT_ALLOW_NETS="172.16.0.0/12"
 
-FIREWALL_PORT_FORWARD_LIST="if=wan,proto=tcp,ext_addr=wanaddress,ext_port=443,int_ip=192.168.10.2,int_port=443,descr=HTTPS,assoc_rule=pass"
-
+# Filtering / forwarding
 FIREWALL_FORWARD_ALLOW_IF="lan,opt1"
-FIREWALL_FORWARD_ALLOW_IP="192.168.10.5,10.0.0.8"
+FIREWALL_FORWARD_ALLOW_IP="10.0.0.8,192.168.10.5"
 FIREWALL_BLOCK_NETS="203.0.113.0/24"
-```
 
-## Пример результата в `config.xml`
-После успешного применения модуль добавляет собственные элементы:
+### Port forwarding
+FIREWALL_PORT_FORWARD_LIST="\
+if=wan,proto=tcp,ext_port=443,int_ip=192.168.10.2,int_port=443,descr=HTTPS,assoc_rule=pass;\
+if=wan,proto=udp,ext_port=1194,int_ip=192.168.10.3,int_port=1194,descr=OpenVPN"
 
-```xml
-<nat>
-  <outbound>
-    <mode>hybrid</mode>
-    <rule>
-      <interface>vtnet0</interface>
-      <source>
-        <network>192.168.0.0/16</network>
-      </source>
-      <destination>
-        <any/>
-      </destination>
-      <descr>ContextFW:NAT 192.168.0.0/16 via vtnet0</descr>
-    </rule>
-    <!-- ... -->
-  </outbound>
-  <rule>
-    <interface>wan</interface>
-    <protocol>tcp</protocol>
-    <destination>
-      <network>wanaddress</network>
-      <port>443</port>
-    </destination>
-    <target>192.168.10.2</target>
-    <local-port>443</local-port>
-    <descr>ContextFW:PF HTTPS</descr>
-  </rule>
-</nat>
-<filter>
-  <rule>
-    <type>pass</type>
-    <interface>lan</interface>
-    <source>
-      <network>lan</network>
-    </source>
-    <destination>
-      <any/>
-    </destination>
-    <descr>ContextFW:Forward allow lan</descr>
-  </rule>
-  <rule>
-    <type>block</type>
-    <interface>wan</interface>
-    <source>
-      <network>203.0.113.0/24</network>
-    </source>
-    <destination>
-      <any/>
-    </destination>
-    <descr>ContextFW:Block 203.0.113.0/24</descr>
-  </rule>
-  <!-- ... -->
-</filter>
-```
+###Режим manual
+Если FIREWALL_RELOAD="manual", модуль готовит и проверяет конфигурацию,
+но не выполняет pfSsh.php playback reloadfilter и /etc/rc.reload_all.
+Если FIREWALL_RELOAD="manual", модуль готовит и проверяет конфигурацию,
+но не выполняет pfSsh.php playback reloadfilter и /etc/rc.reload_all.
 
-## Режим manual
-Если `FIREWALL_RELOAD="manual"`, модуль формирует и валидирует конфигурацию, но не запускает `pfSsh.php playback reloadfilter` и `/etc/rc.reload_all`. Примените изменения вручную:
+Чтобы применить правила вручную:
 
 ```sh
 /usr/local/sbin/pfSsh.php playback reloadfilter
 /etc/rc.reload_all
 ```
-
 Состояние настроек (`sha256` от нормализованных переменных) хранится в `/var/run/context-firewall.state`. Повторный запуск с теми же параметрами завершится без изменений.
 
 ## Дополнительные сведения
