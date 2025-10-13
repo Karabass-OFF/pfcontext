@@ -413,6 +413,12 @@ if mount | grep -q "on $CONTEXT_MOUNT "; then
     umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
 else
     echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
+fi 
+if ! grep -q '<earlyshellcmd>/etc/context.d/ResizeZfs;/etc/context.d/ContextOnly</earlyshellcmd>' /cf/conf/config.xml; then
+    xml ed -L -d '/pfsense/system/earlyshellcmd' -s '/pfsense/system' -t elem -n earlyshellcmd -v '/etc/context.d/ResizeZfs;/etc/context.d/ContextOnly' "$xml_file"
+    echo "$(date) [context] ResizeZfs added to earlyshellcmd" >> "$LOG"
+else
+    echo "$(date) [context] ResizeZfs already present in earlyshellcmd" >> "$LOG"
 fi
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
 # BGP-модуль 
