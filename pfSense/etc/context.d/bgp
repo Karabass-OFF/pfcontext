@@ -78,11 +78,16 @@ TMPPHP="/tmp/frr_apply.$$.php"
     fi
     
 # --- FRR global options from context ----------------------------------------
-#: "${BGP_ENABLE:=on}"
+if [ -n "${BGP_ENABLE}" ] && [ "${BGP_ENABLE}" = "YES" ]; then
+  BGP_ENABLE="on"; 
+  BGP_ROUTER_ID=$(ifconfig | awk '/^[a-z]/ {sub(":", "", $1); iface=$1} /description:[[:space:]]*WAN/ {wan=iface} /^[[:space:]]*inet / && iface==wan {print $2}')
+else 
+  BGP_ENABLE="off"; 
+fi
+
 #: "${BGP_AS:-}"
-: "${BGP_ROUTER_ID:=}"
 #: "${BGP_NEIGHBORS:=2.2.2.2,65115,mAE9e0SOB4tb1uQH6 11.123.12.2,65115,mAE9e0SOB4tb1uQH6}"
-#: "${BGP_RMAP_DEFAULT:=ALL}"
+: "${BGP_RMAP_DEFAULT:=ALL}"
 : "${BGP_REDIST_CONNECTED:=no}"
 : "${BGP_REDIST_STATIC:=no}"
 : "${BGP_REDIST_KERNEL:=no}"

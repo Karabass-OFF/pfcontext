@@ -23,6 +23,7 @@ if [ -f "$CONTEXT_FILE" ]; then
     echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
     # shellcheck source=/dev/null
     . "$CONTEXT_FILE"
+
     cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
     get_ctx_var() {
         idx="$1"
@@ -391,11 +392,11 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
     # Приводим значение к нижнему регистру для удобства сравнения   
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
-        off|0|false|disabled)
+        NO|0|false|disabled)
             pfctl -d >> "$LOG" 2>&1
             echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
             ;;
-        on|1|true|enabled)
+        YES|1|true|enabled)
             if pfctl -s info | grep -q 'Status: Disabled'; then
                 echo "$(date) [context] pfSense firewall was disabled, enabling now" >> "$LOG"
                 pfctl -e >> "$LOG" 2>&1
