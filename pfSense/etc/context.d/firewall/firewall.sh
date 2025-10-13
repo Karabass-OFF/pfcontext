@@ -170,6 +170,7 @@ load_context_variables() {
     FIREWALL_NAT_HOSTS FIREWALL_NAT_ALLOW_NETS FIREWALL_BLOCK_NETS \
     FIREWALL_FORWARD_ALLOW_IF FIREWALL_FORWARD_ALLOW_IP \
     FIREWALL_PORT_FORWARD_LIST FIREWALL_DEBUG
+    
   return 0
 }
 
@@ -221,9 +222,20 @@ prepare_forward_signature() {
 # run_php_helper() executes an embedded PHP helper that performs the
 # heavy XML manipulations and returns a change summary or state hash.
 run_php_helper() {
-  mode="$1"
-  script=$(mktemp -t contextfw.XXXXXX)
-  cat <<'PHP' >"$script"
+mode="$1"
+script=$(mktemp -t contextfw.XXXXXX)
+# Диагностика окружения
+   debug "run_php_helper(): PATH=$PATH"
+   debug "run_php_helper(): PHP_BIN=$PHP_BIN"
+   debug "Invoking PHP: $PHP_BIN $script $mode $WORK_XML"
+   debug "run_php_helper(): PATH=$PATH"
+   debug "run_php_helper(): PHP_BIN=$PHP_BIN"
+      if [ ! -x "$PHP_BIN" ]; then
+          log "ERROR" "PHP binary not found or not executable at $PHP_BIN"
+          ls -l "$PHP_BIN" 2>>"$LOG_FILE" || true
+          return 1
+    fi
+    cat <<'PHP' >"$script"
 <?php
 function env_value(string $name): string {
     return trim((string) getenv($name));
