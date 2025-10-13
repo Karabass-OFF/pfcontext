@@ -170,7 +170,7 @@ load_context_variables() {
     FIREWALL_NAT_HOSTS FIREWALL_NAT_ALLOW_NETS FIREWALL_BLOCK_NETS \
     FIREWALL_FORWARD_ALLOW_IF FIREWALL_FORWARD_ALLOW_IP \
     FIREWALL_PORT_FORWARD_LIST FIREWALL_DEBUG
-    
+
   return 0
 }
 
@@ -653,7 +653,7 @@ foreach ($summary as $line) {
     echo $line, "\n";
 }
 PHP
-  PHP
+  
   FIREWALL_WORK_XML="$WORK_XML" "$PHP_BIN" "$script" "$mode" "$WORK_XML"
   rc=$?
   rm -f "$script"
