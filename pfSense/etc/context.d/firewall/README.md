@@ -63,7 +63,7 @@
 FIREWALL_PORT_FORWARD_LIST="\
 if=wan,proto=tcp,ext_addr=wanaddress,ext_port=443,int_ip=192.168.10.2,int_port=443,descr=HTTPS,assoc_rule=pass;\
 if=wan,proto=udp,ext_port=1194,int_ip=192.168.10.3,int_port=1194,descr=OpenVPN"
-
+```
 ---
 
 ### Пример context.sh
@@ -89,16 +89,17 @@ FIREWALL_FORWARD_ALLOW_IP="10.0.0.8,192.168.10.5"
 FIREWALL_BLOCK_NETS="203.0.113.0/24"
 ```
 ### Port forwarding
+
 ```bash
 FIREWALL_PORT_FORWARD_LIST="\
 if=wan,proto=tcp,ext_port=443,int_ip=192.168.10.2,int_port=443,descr=HTTPS,assoc_rule=pass;\
 if=wan,proto=udp,ext_port=1194,int_ip=192.168.10.3,int_port=1194,descr=OpenVPN"
 ```
 ###Режим manual
-Если FIREWALL_RELOAD="manual", модуль готовит и проверяет конфигурацию,
-но не выполняет pfSsh.php playback reloadfilter и /etc/rc.reload_all.
-Если FIREWALL_RELOAD="manual", модуль готовит и проверяет конфигурацию,
-но не выполняет pfSsh.php playback reloadfilter и /etc/rc.reload_all.
+Если ```FIREWALL_RELOAD="manual"```, модуль готовит и проверяет конфигурацию,
+но не выполняет ```pfSsh.php playback reloadfilter``` и ```/etc/rc.reload_all```.
+Если ```FIREWALL_RELOAD="manual"```, модуль готовит и проверяет конфигурацию,
+но не выполняет ```pfSsh.php playback reloadfilter``` и ```/etc/rc.reload_all```.
 
 Чтобы применить правила вручную:
 
