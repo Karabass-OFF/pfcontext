@@ -3,9 +3,8 @@
 # ContextOnly script for pfSense
 #
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
-
 LOG="/var/log/context.log"
-#LOG="/dev/null" # Uncomment for debugging
+#LOG="/dev/null" # Uncomment for disable logging
 CONTEXT_MOUNT="/mnt/context"
 PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
@@ -276,11 +275,31 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
                         route delete default >/dev/null 2>&1
                         route add default "$gw"
-                        # Отключаем bogons и private networks для WAN
-                        xml ed -L \
-                            -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
-                            -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
-                            "$backup_xml_file"
+                        # Отключаем/Включаем private networks для WAN
+                        if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
+                            xml ed -L \
+                                -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
+                        else
+                            xml ed -L \
+                                -d "//interfaces/$network/blockbogons" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
+                        fi
+                        # Отключаем/Включаем bogon networks для WAN
+                        if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
+                            xml ed -L \
+                                -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] BLOCK_BOGON_NETWORKS" >> "$LOG"
+                        else
+                            xml ed -L \
+                                -d "//interfaces/$network/blockpriv" \
+                                "$backup_xml_file"
+                            echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
+                        fi
+                        
                         # Добавляем шлюз в config.xml
                         xml ed -L \
                             -d "//system/gateway" \
@@ -321,6 +340,28 @@ if [ -n "${SET_HOSTNAME:-}" ]; then
     hostname "$SET_HOSTNAME"
     xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
     echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
+fi
+
+# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
+if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+    mkdir -p /root/.ssh
+    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+        # кодируем ключ в base64 (без переносов строк)
+        ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
+        xml ed -L \
+                -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" \
+                "$backup_xml_file"
+        echo "$(date) [context] SSH public key updated in config.xml" >> "$LOG"
+        RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
+    fi
+fi
+# Пароль admin (через playback)
+old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$backup_xml_file")
+if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
+    echo "$(date) [context] Admin password unchanged" >> "$LOG"
+else
+    pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
+    echo "$(date) [context] Admin password changed" >> "$LOG"
 fi
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
@@ -366,14 +407,6 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
             ;;
     esac
 fi
-# Пароль admin (через playback)
-old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$xml_file")
-if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
-    echo "$(date) [context] Admin password unchanged" >> "$LOG"
-else
-    pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
-    echo "$(date) [context] Admin password changed" >> "$LOG"
-fi
 # Отмонтировать диск после выполнения всех операций
 if mount | grep -q "on $CONTEXT_MOUNT "; then
     umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
@@ -387,19 +420,5 @@ if [ -x /etc/context.d/bgp ]; then
     . /etc/context.d/bgp
     echo "$(date) [context] BGP module (return $?)" >> "$LOG"
 fi
-# SSH ключ 
-if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
-    mkdir -p /root/.ssh
-    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
-        echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
-        chmod 600 /root/.ssh/authorized_keys
-        chmod 700 /root/.ssh
-        echo "$(date) [context] SSH public key updated" >> "$LOG"
-    fi
-fi
-### Если были изменения в интерфейсах, перезапускаем службы
-##if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
-##    /etc/rc.reload_all start >> "$LOG" 2>&1
-##    rm -f "$PID"
-##fi
+
 echo "$(date) [context] FINISH" >> "$LOG"

@@ -1,29 +1,27 @@
-1. Настройте сетевой интерфейс и включите SSH-доступ.
-2. Откройте веб-интерфейс по адресу http://host и проверьте наличие обновлений.
-3. Скопируйте содержимое текущей директории на удалённый хост в корень:
-    ```sh
-    scp -r ./ root@host:/
+1. Настройте сетевой доступ к pfSense и включите SSH (System ➜ Advanced ➜ Enable Secure Shell).
+2. Через веб-интерфейс http://host выполните проверку обновлений и установите критические патчи, если они доступны.
+3. Скопируйте содержимое текущей директории `pfSense` на удалённый хост в корень:
+   ```sh
+   scp -r ./ root@host:/
+   ```
+4. Подключитесь к удалённому хосту и установите обязательные пакеты:
+   ```sh
+    ssh user@host 
+    pkg install -y xmlstarlet
+    et PKG = `pkg search -x frr |  awk '/pfSense/{print $1}'`
+    echo y | pkg install "$PKG"
     ```
-4. Подключитесь к удалённому хосту и установите xmlstarlet:
-    ```sh
-    ssh user@host 'pkg install xmlstarlet'
-    ```
-5. Примените патч к /etc/rc.initial:
-    ```sh
-    ssh user@host 'patch --dry-run /etc/rc.initial < /tmp/rc.initial.patch && patch /etc/rc.initial < /tmp/rc.initial.patch'
-    ```
+5. Добавьте ранний запуск скриптов в `config.xml` (команда создаст узел, если его ещё нет):
+   ```sh
+   ssh user@host "xml ed -L -u '//system/earlyshellcmd' -v '/etc/context.d/ResizeZfs onestart && /etc/context.d/ContextOnly onestart' /cf/conf/config.xml || \
+                  xml ed -L -a '//system' -t elem -n earlyshellcmd -v '/etc/context.d/ResizeZfs onestart && /etc/context.d/ContextOnly onestart' /cf/conf/config.xml"
+   ```
 6. Очистите логи и резервные копии:
     ```sh
     ssh user@host "find /var/log -type f -exec rm -f {} +"
    ssh user@host "rm -f /cf/conf/backup/*"
     ```
-7. Установка FRR:
-    ```sh
-    set PKG = `pkg search -x frr |  awk '/pfSense/{print $1}'`
-echo "$PKG"
-echo y | pkg install "$PKG"
-    ```
-8. Перезагрузите удалённый хост:
-    ```sh
-    ssh user@host 'reboot'
-    ```
+7. Перезагрузите pfSense, чтобы запустился новый цикл инициализации:
+   ```sh
+   ssh user@host 'reboot'
+   ```
