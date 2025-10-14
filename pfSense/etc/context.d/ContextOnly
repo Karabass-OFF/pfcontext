@@ -275,9 +275,9 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
                         route delete default >/dev/null 2>&1
                         route add default "$gw"
-                        # Отключаем/Включаем private networks для WAN
-                        if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
-                            xml ed -L \
+                        # Отключаем/Включаем bogon networks для WAN
+                        if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
+                             xml ed -L \
                                 -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
                                 "$backup_xml_file"
                             echo "$(date) [context] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
@@ -287,8 +287,8 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 "$backup_xml_file"
                             echo "$(date) [context] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
                         fi
-                        # Отключаем/Включаем bogon networks для WAN
-                        if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
+                        # Отключаем/Включаем private networks для WAN
+                        if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
                             xml ed -L \
                                 -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
                                 "$backup_xml_file"
@@ -299,7 +299,6 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 "$backup_xml_file"
                             echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
                         fi
-                        
                         # Добавляем шлюз в config.xml
                         xml ed -L \
                             -d "//system/gateway" \
