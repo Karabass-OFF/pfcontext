@@ -23,7 +23,6 @@ if [ -f "$CONTEXT_FILE" ]; then
     echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
     # shellcheck source=/dev/null
     . "$CONTEXT_FILE"
-
     cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
     get_ctx_var() {
         idx="$1"
@@ -37,7 +36,7 @@ if [ -f "$CONTEXT_FILE" ]; then
     }
 else
     echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
-    return 0
+    exit 0
 fi
 # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
 iface_type_changed=false
@@ -343,19 +342,7 @@ if [ -n "${SET_HOSTNAME:-}" ]; then
     echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
 fi
 
-# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
-if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
-    mkdir -p /root/.ssh
-    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
-        # кодируем ключ в base64 (без переносов строк)
-        ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
-        xml ed -L \
-                -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" \
-                "$backup_xml_file"
-        echo "$(date) [context] SSH public key updated in config.xml" >> "$LOG"
-        RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
-    fi
-fi
+
 # Пароль admin (через playback)
 old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$backup_xml_file")
 if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
@@ -392,11 +379,11 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
     # Приводим значение к нижнему регистру для удобства сравнения   
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
-        NO|0|false|disabled)
+        yes|off|0|false|disabled)
             pfctl -d >> "$LOG" 2>&1
             echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
             ;;
-        YES|1|true|enabled)
+        no|on|1|true|enabled)
             if pfctl -s info | grep -q 'Status: Disabled'; then
                 echo "$(date) [context] pfSense firewall was disabled, enabling now" >> "$LOG"
                 pfctl -e >> "$LOG" 2>&1
@@ -413,12 +400,6 @@ if mount | grep -q "on $CONTEXT_MOUNT "; then
     umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
 else
     echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
-fi 
-if ! grep -q '<earlyshellcmd>/etc/context.d/ResizeZfs;/etc/context.d/ContextOnly</earlyshellcmd>' /cf/conf/config.xml; then
-    xml ed -L -d '/pfsense/system/earlyshellcmd' -s '/pfsense/system' -t elem -n earlyshellcmd -v '/etc/context.d/ResizeZfs;/etc/context.d/ContextOnly' "$xml_file"
-    echo "$(date) [context] ResizeZfs added to earlyshellcmd" >> "$LOG"
-else
-    echo "$(date) [context] ResizeZfs already present in earlyshellcmd" >> "$LOG"
 fi
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
 # BGP-модуль 
@@ -426,6 +407,27 @@ if [ -x /etc/context.d/bgp ]; then
     echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
     . /etc/context.d/bgp
     echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+fi
+
+
+# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
+if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+    mkdir -p /root/.ssh
+    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+        # кодируем ключ в base64 (без переносов строк)
+        ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
+        if xml sel -t -v "//user[name='admin']/authorizedkeys" "$xml_file" >/dev/null 2>&1; then
+            xml ed -L -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" "$xml_file"
+        else
+            xml ed -L -s "//user[name='admin']" -t elem -n "authorizedkeys" -v "$ENC_KEY" "$xml_file"
+        fi
+        echo "$(date) [context] SSH public key updated in config.xml" >> "$LOG"
+        echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+        chmod 700 /root/.ssh
+        echo "$(date) [context] SSH public key updated" >> "$LOG"
+        #RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
+    fi
 fi
 
 echo "$(date) [context] FINISH" >> "$LOG"
