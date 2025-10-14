@@ -341,8 +341,13 @@ if [ -n "${SET_HOSTNAME:-}" ]; then
     xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
     echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
 fi
-
-
+ 
+# --- Password override logic ---
+if [ -n "${PASSWORD_ROOT}" ]; then
+    PASSWORD="${PASSWORD_ROOT}"
+    echo "$(date) [context] PASSWORD_ROOT detected → override PASSWORD" >> "$LOG"
+fi
+ 
 # Пароль admin (через playback)
 old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$backup_xml_file")
 if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
@@ -374,18 +379,20 @@ elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, ко
         echo "$(date) [context] pfSense services restarted" >> "$LOG"
     fi
 fi
+
+echo "$(date) [context] pfSense firewall switch = ${PFCTL}" >> "$LOG"
 # отключение/включение pfSense firewall (pfctl) 
 if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указана
     # Приводим значение к нижнему регистру для удобства сравнения   
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
-        yes|off|0|false|disabled)
+        no|off|0|false|disabled)
             pfctl -d >> "$LOG" 2>&1
             echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
             ;;
-        no|on|1|true|enabled)
+        yes|on|1|true|enabled)
             if pfctl -s info | grep -q 'Status: Disabled'; then
-                echo "$(date) [context] pfSense firewall was disabled, enabling now" >> "$LOG"
+                echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'" >> "$LOG"
                 pfctl -e >> "$LOG" 2>&1
                 echo "$(date) [context] pfSense firewall enabled" >> "$LOG"
             fi
