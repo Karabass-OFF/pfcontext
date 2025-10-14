@@ -275,9 +275,9 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
                         route delete default >/dev/null 2>&1
                         route add default "$gw"
-                        # Отключаем/Включаем bogon networks для WAN
-                        if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
-                             xml ed -L \
+                        # Отключаем/Включаем private networks для WAN
+                        if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
+                            xml ed -L \
                                 -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
                                 "$backup_xml_file"
                             echo "$(date) [context] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
@@ -287,8 +287,8 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 "$backup_xml_file"
                             echo "$(date) [context] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
                         fi
-                        # Отключаем/Включаем private networks для WAN
-                        if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
+                        # Отключаем/Включаем bogon networks для WAN
+                        if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
                             xml ed -L \
                                 -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
                                 "$backup_xml_file"
@@ -299,6 +299,7 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 "$backup_xml_file"
                             echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
                         fi
+                        
                         # Добавляем шлюз в config.xml
                         xml ed -L \
                             -d "//system/gateway" \
@@ -362,8 +363,9 @@ if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/d
 elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, копируем его в config.xml
     cp "$backup_xml_file" "$xml_file"
     echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
+fi
+
     # Перезагрузка служб pfSense (если указано в контексте)
-    
     if [ "${RC_RELOAD_ALL}" = "on" ]; then
         # Перезагружаем службы pfSense
         /etc/rc.reload_all start >> "$LOG" 2>&1
@@ -372,12 +374,11 @@ elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, ко
         echo "$(date) [context] pfSense services restarted" >> "$LOG"
     fi
     # Перезагрузка интерфейсов pfSense (если указано в контексте)
-    if [ "${RC_RELOAD_IFACE}" = "on" ]; then
+    if [ "${RC_RELOAD_IFACE}" = "on" ] || [ -n "${PID}" ]; then
         # Перезагружаем интерфейсы pfSense
         pfSsh.php playback restartallwan >> "$LOG" 2>&1
         echo "$(date) [context] pfSense services restarted" >> "$LOG"
     fi
-fi
 
 echo "$(date) [context] pfSense firewall switch = ${PFCTL}" >> "$LOG"
 # отключение/включение pfSense firewall (pfctl) 
