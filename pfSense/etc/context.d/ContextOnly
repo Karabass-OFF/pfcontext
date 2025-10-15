@@ -273,13 +273,6 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                         "$backup_xml_file"
                     # Настраиваем шлюз по умолчанию для WAN
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
-                        # Проверяем, есть ли уже шлюз по умолчанию
-                        if ip route | grep -q '^default' && [ "$gw" = ; then
-                            echo "✅ Шлюз по умолчанию настроен"
-                        else
-                            echo "❌ Шлюз по умолчанию отсутствует"
-                        fi
-
                         route delete default >/dev/null 2>&1
                         route add default "$gw"
                         # Отключаем/Включаем private networks для WAN
