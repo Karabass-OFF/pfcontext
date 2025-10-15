@@ -273,8 +273,48 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                         "$backup_xml_file"
                     # Настраиваем шлюз по умолчанию для WAN
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
-                        route delete default >/dev/null 2>&1
-                        route add default "$gw"
+                        # Проверяем текущий шлюз по умолчанию и меняем его, только если он не совпадает с нужным и выключен BGP
+                        current_gw=$(netstat -rn | awk '/^0.0.0.0/ {print $2; exit}')
+                        echo "$(date) [context] Current default gateway: $current_gw, desired: $gw" >> "$LOG"
+                        if [ "$current_gw" != "$gw" ] && [ "${BGP_ENABLE}" != "YES" ]; then
+                            echo "$(date) [context] Current default gateway: $current_gw differs from desired: $gw — updating route (BGP off)" >> "$LOG"
+                            route delete default >/dev/null 2>&1
+                            route add default "$gw"
+                            # --- Проверяем, есть ли секция <gateways> ---
+                            if ! xml sel -t -v "//gateways" "$backup_xml_file" >/dev/null 2>&1; then
+                                echo "$(date) [context] Gateways section missing — creating one" >> "$LOG"
+                                xml ed -L -s "//pfsense" -t elem -n "gateways" -v "" "$backup_xml_file"
+                            fi
+                            # Удаляем возможный старый шлюз перед добавлением нового
+                            xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
+                            # Добавляем шлюз в config.xml
+                            xml ed -L \
+                                -s "//gateways" -t elem -n "gateway_item" -v "" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "interface" -v "$network" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "gateway" -v "$gw" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "name" -v "WANGW" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "descr" -v "Default IPv4 Gateway" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "defaultgw4" -v "yes" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "weight" -v "1" \
+                                -u "//gateways/defaultgw4" -v "WANGW" \
+                                "$backup_xml_file"
+                            # Привязываем шлюз WANGW к интерфейсу WAN, если его нет
+                            if xml sel -t -v "//interfaces/$network/gateway" $backup_xml_file >/dev/null 2>&1; then
+                                xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" $backup_xml_file
+                            else
+                                xml ed -L -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" $backup_xml_file
+                            fi                        fi
+                        if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
+                            echo "$(date) [context] BGP is enabled, removing default route: $gw because BGP will manage it" >> "$LOG"
+                            route delete default >/dev/null 2>&1
+                            # Удаляем старый шлюз из config.xml, если он есть
+                            xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
+
+                        fi
                         # Отключаем/Включаем private networks для WAN
                         if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
                             xml ed -L \
@@ -299,14 +339,6 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 "$backup_xml_file"
                             echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
                         fi
-                        
-                        # Добавляем шлюз в config.xml
-                        xml ed -L \
-                            -d "//system/gateway" \
-                            -s "//system" -t elem -n "gateway" -v "$gw" \
-                            -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" \
-                            "$backup_xml_file"
-                        echo "$(date) [context] Gateway: $gw" >> "$LOG"
                     fi
                 fi
             fi
