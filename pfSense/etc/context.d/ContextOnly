@@ -273,6 +273,13 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                         "$backup_xml_file"
                     # Настраиваем шлюз по умолчанию для WAN
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
+                        # Проверяем, есть ли уже шлюз по умолчанию
+                        if ip route | grep -q '^default' && [ "$gw" = ; then
+                            echo "✅ Шлюз по умолчанию настроен"
+                        else
+                            echo "❌ Шлюз по умолчанию отсутствует"
+                        fi
+
                         route delete default >/dev/null 2>&1
                         route add default "$gw"
                         # Отключаем/Включаем private networks для WAN
@@ -353,8 +360,18 @@ old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$backup_xml
 if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
     echo "$(date) [context] Admin password unchanged" >> "$LOG"
 else
-    pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
-    echo "$(date) [context] Admin password changed" >> "$LOG"
+     if pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1; then
+        echo "$(date) [context] Admin password changed" >> "$LOG"
+        new_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$xml_file" 2>/dev/null || true)
+        if [ -n "$new_hash" ]; then
+            xml ed -L -u "//user[name='admin']/bcrypt-hash" -v "$new_hash" "$backup_xml_file"
+            echo "$(date) [context] Synced admin bcrypt-hash into backup XML" >> "$LOG"
+        else
+            echo "$(date) [context] Warning: unable to read new admin bcrypt-hash for backup XML sync" >> "$LOG"
+        fi
+    else
+        echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
+    fi
 fi
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
