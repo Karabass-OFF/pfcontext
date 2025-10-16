@@ -3,27 +3,28 @@
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 LOG="/dev/null" # Uncomment this line to disable logging
-    echo "$(date) [context] === START ResizeZfs $(date) ===" >> "$LOG"
+{
+    echo "$(date) [context] === START ResizeZfs $(date) ===" 
     DISK=$(gpart show | awk '/GPT/ {print $4; exit}') # Получаем имя диска, на котором находится ZFS-раздел
     # Проверяем, есть ли повреждение таблицы разделов
     if gpart show "$DISK" 2>&1 | grep -q 'CORRUPT'; then
-        echo "$(date) [context] Обнаружена поврежденная таблица разделов, выполняется восстановление..." >> "$LOG"
-        gpart recover "$DISK" >> "$LOG" 2>&1
+        echo "$(date) [context] Обнаружена поврежденная таблица разделов, выполняется восстановление..." 
+        gpart recover "$DISK" 
     fi
-             
     # Проверяем, достаточно ли свободного места на диске для расширения ZFS-раздела
     free_sectors=$(gpart show | awk '/free / {s+=$2} END {print s}')
     if [ "$free_sectors" -le 7128 ]; then
-        echo "$(date) [context] Недостаточно места для расширения ZFS-раздела ($free_sectors секторов)" >> "$LOG"
+        echo "$(date) [context] Недостаточно места для расширения ZFS-раздела ($free_sectors секторов)" 
     else
         ZFS_PART_NUM=$(gpart show | awk '/freebsd-zfs/ {print $3}')
         ZFS_DEV="${DISK}p${ZFS_PART_NUM}"
        #gpart commit "$DISK" >> "$LOG" 2>&1 # Коммитим изменения в таблице разделов
-        gpart recover "$DISK" >> "$LOG" 2>&1 # Восстанавливаем таблицу разделов
-        gpart resize -i "$ZFS_PART_NUM" "$DISK" >> "$LOG" 2>&1 # Расширяем ZFS-раздел
-        zpool online -e "$POOL" "$ZFS_DEV" >> "$LOG" 2>&1 # Расширяем ZFS-пул
-        zpool list "$POOL" >> "$LOG" 2>&1 # Выводим информацию о ZFS-пуле
+        gpart recover "$DISK"  # Восстанавливаем таблицу разделов
+        gpart resize -i "$ZFS_PART_NUM" "$DISK" # Расширяем ZFS-раздел
+        zpool online -e "$POOL" "$ZFS_DEV"  # Расширяем ZFS-пул
+        zpool list "$POOL"  # Выводим информацию о ZFS-пуле
         echo "$(date) [context] ZFS-раздел расширен" >> "$LOG" 
     fi
-
-    echo "$(date) [context] === END ResizeZfs $(date) ===" >> "$LOG"
+    echo "$(date) [context] === END ResizeZfs $(date) ==="
+    
+    } >> "$LOG"

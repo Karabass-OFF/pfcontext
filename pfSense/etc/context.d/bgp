@@ -13,7 +13,7 @@ log() {
 # --- 0) Preconditions --------------------------------------------------------
 if ! pkg info -q -e frr9 && ! pkg info -q -e pfSense-pkg-frr; then
   log "FRR package not installed, skipping"
-  return 0
+  return 0 
 fi
 
 
@@ -37,6 +37,7 @@ fi
 ensure_frr_vtysh_conf() {
 # Генерируем vtysh.conf через frr.inc
 TMPPHP="/tmp/frr_apply.$$.php"
+# shellcheck disable=SC2016
 /usr/bin/printf '%s\n' \
 '<?php' \
 'require_once("/etc/inc/globals.inc");' \
@@ -83,6 +84,7 @@ if [ -n "${BGP_ENABLE}" ] && [ "${BGP_ENABLE}" = "YES" ]; then
   BGP_ROUTER_ID=$(ifconfig | awk '/^[a-z]/ {sub(":", "", $1); iface=$1} /description:[[:space:]]*WAN/ {wan=iface} /^[[:space:]]*inet / && iface==wan {print $2}')
 else 
   BGP_ENABLE="off"; 
+  return 0; # BGP не включён, выходим
 fi
 
 #: "${BGP_AS:-}"
@@ -103,12 +105,13 @@ mask() {
   # маскируем пароль в логах: первые 2 и последние 2 символа видны
   v="$1"; [ -z "$v" ] && { printf -- "-"; return; }
   l=${#v}
-  if [ "$l" -le 4 ]; then printf '****'; else printf '%s****%s' "${v%${v#??}}" "${v#*${v%??}}"; fi
+  if [ "$l" -le 4 ]; then printf '****'; else printf '%s****%s' "${v%"${v#???}"}" "${v#"${v%???}"}"; fi
 }
 # Логируем все переменные (без паролей)
 log_vars() {
   log "BGP_ENABLE=$BGP_ENABLE"
-  [ -n "${BGP_AS:-}" ] && log "BGP_AS=$BGP_AS" || log "BGP_AS=(unset)"
+  #[ -n "${BGP_AS:-}" ] && log "BGP_AS=$BGP_AS" || log "BGP_AS=(unset)"
+  if [ -n "${BGP_AS:-}" ]; then log "BGP_AS=$BGP_AS"; else log "BGP_AS=(unset)"; fi
   log "BGP_ROUTER_ID=$BGP_ROUTER_ID"
   log "BGP_RMAP_DEFAULT=$BGP_RMAP_DEFAULT"
   log "BGP_REDIST_CONNECTED=$BGP_REDIST_CONNECTED"
@@ -121,7 +124,7 @@ log_vars() {
   log "FRR_MASTER_PASSWORD=$(mask "$FRR_MASTER_PASSWORD")"
   log "FRR_PASSWORD_ENCRYPT=$FRR_PASSWORD_ENCRYPT"
   # Кратко про соседей (без паролей)
-  set -- $BGP_NEIGHBORS
+  set -- "$BGP_NEIGHBORS"
   idx=0
   # Перебираем все соседи и логируем их без паролей 
   for triplet in "$@"; do
