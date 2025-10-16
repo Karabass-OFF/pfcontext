@@ -412,8 +412,7 @@ fi
     # Перезагрузка служб pfSense (если указано в контексте)
     if [ "${RC_RELOAD_ALL}" = "on" ]; then
         # Перезагружаем службы pfSense
-       {
-            /etc/rc.reload_all start
+       {    /etc/rc.reload_all start
             echo "$(date) [context] pfSense services reloaded"
             pfSsh.php playback restartallwan
             echo "$(date) [context] pfSense services restarted"
@@ -421,8 +420,9 @@ fi
     fi
     # Перезагрузка интерфейсов pfSense (если указано в контексте)
     if [ "${RC_RELOAD_IFACE}" = "on" ] || [ -n "${PID}" ]; then
+        echo "$(date) [context]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
         # Перезагружаем интерфейсы pfSense
-        {
+        {   ls -l "$PID" >> "$LOG" 2>&1
             pfSsh.php playback restartallwan
             echo "$(date) [context] pfSense services restarted"
         } >>"$LOG" 2>&1
@@ -489,5 +489,6 @@ if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
         #RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
     fi
 fi
-
+rm -f "$PID" # Удаляем PID файл, если он есть
+echo "$(date) [context]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
 echo "$(date) [context] FINISH" >> "$LOG"
