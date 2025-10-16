@@ -305,7 +305,8 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" $backup_xml_file
                             else
                                 xml ed -L -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" $backup_xml_file
-                            fi                        fi
+                            fi 
+                         fi
                         if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
                             echo "$(date) [context] BGP is enabled, removing default route: $gw because BGP will manage it" >> "$LOG"
                             route delete default >/dev/null 2>&1
