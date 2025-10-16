@@ -308,14 +308,6 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                         elif [ "$current_gw" = "$gw" ]; then # Шлюз уже установлен и совпадает с нужным 
                             echo "$(date) [context] Current default gateway: $current_gw matches desired: $gw — no change needed" >> "$LOG"
                         fi
-                        if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
-                            echo "$(date) [context] BGP is enabled, removing default route: $gw because BGP will manage it" >> "$LOG"
-                            route delete default >/dev/null 2>&1
-                            # Удаляем старый шлюз из config.xml, если он есть
-                            xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
-                            xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
-                            xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
-                        fi
                         # Отключаем/Включаем private networks для WAN
                         if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
                             xml ed -L \
@@ -374,13 +366,11 @@ if [ -n "${SET_HOSTNAME:-}" ]; then
     xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
     echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
 fi
- 
 # --- Password override logic ---
 if [ -n "${PASSWORD_ROOT}" ]; then
     PASSWORD="${PASSWORD_ROOT}"
     echo "$(date) [context] PASSWORD_ROOT detected → override PASSWORD" >> "$LOG"
 fi
- 
 # Пароль admin (через playback)
 old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$backup_xml_file")
 if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
@@ -399,6 +389,8 @@ else
         echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
     fi
 fi
+# если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
+# RC_RELOAD_IFACE=on|off (по умолчанию off)
 : "${RC_RELOAD_IFACE:=off}"
 hash1="$(xml sel -t -c "//interfaces" "$xml_file" | md5)"
 hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | md5)"
@@ -409,6 +401,16 @@ if [ "$hash1" != "$hash2" ]; then
     }>> "$LOG"
     RC_RELOAD_IFACE="on"
 fi
+# если BGP включен, удаляем маршрут по умолчанию, чтобы BGP управлял маршрутом
+# BGP_ENABLE=YES|NO (по умолчанию NO)
+if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
+    echo "$(date) [context] BGP is enabled, removing default route: $gw because BGP will manage it" >> "$LOG"
+    route delete default >/dev/null 2>&1
+    # Удаляем старый шлюз из config.xml, если он есть
+    xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
+    xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
+    xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
+fi
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
     rm -f "$backup_xml_file"
@@ -417,7 +419,6 @@ elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, ко
     cp "$backup_xml_file" "$xml_file"
     echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
 fi
-
     # Перезагрузка служб pfSense (если указано в контексте)
     if [ "${RC_RELOAD_ALL}" = "on" ]; then
         # Перезагружаем службы pfSense
@@ -432,8 +433,7 @@ fi
     if [ "${RC_RELOAD_IFACE}" = "on" ]; then
         echo "$(date) [context]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
         # Перезагружаем интерфейсы pfSense
-        {   ls -l "$PID" >> "$LOG" 2>&1
-            pfSsh.php playback restartallwan
+        {   pfSsh.php playback restartallwan
             echo "$(date) [context] pfSense services restarted"
         } >>"$LOG" 2>&1
     fi
