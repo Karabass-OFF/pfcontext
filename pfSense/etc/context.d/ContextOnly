@@ -34,9 +34,11 @@ if [ -f "$CONTEXT_FILE" ]; then
         fi
         printf '%s' "${val:-}"
     }
+    # Проверяем текущий шлюз по умолчанию и меняем его, только если он не совпадает с нужным и выключен BGP
+    current_gw=$(netstat -rn | awk '/^0.0.0.0/ {print $2; exit}')    
 else
     echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
-    return 0
+    exit 0
 fi
 # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
 iface_type_changed=false
@@ -271,10 +273,50 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                         -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
                         -e 's|<enable>YES</enable>|<enable></enable>|g' \
                         "$backup_xml_file"
-                    # Настраиваем шлюз по умолчанию для WAN
+                    # Настраиваем шлюз по умолчанию для WAN 
                     if [ "$network" = "wan" ] && [ -n "$gw" ]; then
-                        route delete default >/dev/null 2>&1
-                        route add default "$gw"
+                        if [ "$current_gw" != "$gw" ] && [ "${BGP_ENABLE}" != "YES" ]; then # Меняем шлюз, только если он отличается от текущего и BGP выключен
+                            echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $gw — updating route (BGP off)" >> "$LOG"
+                            route delete default >/dev/null 2>&1
+                            route add default "$gw"
+                            # --- Проверяем, есть ли секция <gateways> ---
+                            if ! xml sel -t -v "//gateways" "$backup_xml_file" >/dev/null 2>&1; then
+                                echo "$(date) [context] Gateways section missing — creating one" >> "$LOG"
+                                xml ed -L -s "//pfsense" -t elem -n "gateways" -v "" "$backup_xml_file"
+                            fi
+                            # Удаляем возможный старый шлюз перед добавлением нового
+                            xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
+                            # Добавляем шлюз в config.xml
+                            xml ed -L \
+                                -s "//gateways" -t elem -n "gateway_item" -v "" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "interface" -v "$network" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "gateway" -v "$gw" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "name" -v "WANGW" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "descr" -v "Default IPv4 Gateway" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "defaultgw4" -v "yes" \
+                                -s "//gateways/gateway_item[last()]" -t elem -n "weight" -v "1" \
+                                -u "//gateways/defaultgw4" -v "WANGW" \
+                                "$backup_xml_file"
+                            # Привязываем шлюз WANGW к интерфейсу WAN, если его нет
+                            if xml sel -t -v "//interfaces/$network/gateway" "$backup_xml_file" >/dev/null 2>&1; then
+                                xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" "$backup_xml_file"
+                            else
+                                xml ed -L -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" "$backup_xml_file"
+                            fi 
+                        elif [ "$current_gw" = "$gw" ]; then # Шлюз уже установлен и совпадает с нужным 
+                            echo "$(date) [context] Current default gateway: $current_gw matches desired: $gw — no change needed" >> "$LOG"
+                        fi
+                        if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
+                            echo "$(date) [context] BGP is enabled, removing default route: $gw because BGP will manage it" >> "$LOG"
+                            route delete default >/dev/null 2>&1
+                            # Удаляем старый шлюз из config.xml, если он есть
+                            xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
+                            xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
+
+                        fi
                         # Отключаем/Включаем private networks для WAN
                         if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
                             xml ed -L \
@@ -299,14 +341,6 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                                 "$backup_xml_file"
                             echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
                         fi
-                        
-                        # Добавляем шлюз в config.xml
-                        xml ed -L \
-                            -d "//system/gateway" \
-                            -s "//system" -t elem -n "gateway" -v "$gw" \
-                            -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" \
-                            "$backup_xml_file"
-                        echo "$(date) [context] Gateway: $gw" >> "$LOG"
                     fi
                 fi
             fi
@@ -341,27 +375,30 @@ if [ -n "${SET_HOSTNAME:-}" ]; then
     xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
     echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
 fi
-
-# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
-if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
-    mkdir -p /root/.ssh
-    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
-        # кодируем ключ в base64 (без переносов строк)
-        ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
-        xml ed -L \
-                -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" \
-                "$backup_xml_file"
-        echo "$(date) [context] SSH public key updated in config.xml" >> "$LOG"
-        RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
-    fi
+ 
+# --- Password override logic ---
+if [ -n "${PASSWORD_ROOT}" ]; then
+    PASSWORD="${PASSWORD_ROOT}"
+    echo "$(date) [context] PASSWORD_ROOT detected → override PASSWORD" >> "$LOG"
 fi
+ 
 # Пароль admin (через playback)
 old_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$backup_xml_file")
 if php -r "exit(password_verify('${PASSWORD:-}', '$old_hash') ? 0 : 1);"; then
     echo "$(date) [context] Admin password unchanged" >> "$LOG"
 else
-    pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1
-    echo "$(date) [context] Admin password changed" >> "$LOG"
+     if pfSsh.php playback ChangePassTool admin "${PASSWORD:-}" >> "$LOG" 2>&1; then
+        echo "$(date) [context] Admin password changed" >> "$LOG"
+        new_hash=$(xml sel -t -m "//user[name='admin']" -v "bcrypt-hash" -n "$xml_file" 2>/dev/null || true)
+        if [ -n "$new_hash" ]; then
+            xml ed -L -u "//user[name='admin']/bcrypt-hash" -v "$new_hash" "$backup_xml_file"
+            echo "$(date) [context] Synced admin bcrypt-hash into backup XML" >> "$LOG"
+        else
+            echo "$(date) [context] Warning: unable to read new admin bcrypt-hash for backup XML sync" >> "$LOG"
+        fi
+    else
+        echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
+    fi
 fi
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
@@ -370,36 +407,46 @@ if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/d
 elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, копируем его в config.xml
     cp "$backup_xml_file" "$xml_file"
     echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
+fi
+
     # Перезагрузка служб pfSense (если указано в контексте)
-    
     if [ "${RC_RELOAD_ALL}" = "on" ]; then
         # Перезагружаем службы pfSense
-        /etc/rc.reload_all start >> "$LOG" 2>&1
-        echo "$(date) [context] pfSense services reloaded" >> "$LOG"
-        pfSsh.php playback restartallwan >> "$LOG" 2>&1
-        echo "$(date) [context] pfSense services restarted" >> "$LOG"
+       {
+            /etc/rc.reload_all start
+            echo "$(date) [context] pfSense services reloaded"
+            pfSsh.php playback restartallwan
+            echo "$(date) [context] pfSense services restarted"
+        } >>"$LOG" 2>&1
     fi
     # Перезагрузка интерфейсов pfSense (если указано в контексте)
-    if [ "${RC_RELOAD_IFACE}" = "on" ]; then
+    if [ "${RC_RELOAD_IFACE}" = "on" ] || [ -n "${PID}" ]; then
         # Перезагружаем интерфейсы pfSense
-        pfSsh.php playback restartallwan >> "$LOG" 2>&1
-        echo "$(date) [context] pfSense services restarted" >> "$LOG"
+        {
+            pfSsh.php playback restartallwan
+            echo "$(date) [context] pfSense services restarted"
+        } >>"$LOG" 2>&1
     fi
-fi
+
+echo "$(date) [context] pfSense firewall switch = ${PFCTL}" >> "$LOG"
 # отключение/включение pfSense firewall (pfctl) 
 if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указана
     # Приводим значение к нижнему регистру для удобства сравнения   
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
-        off|0|false|disabled)
-            pfctl -d >> "$LOG" 2>&1
-            echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
+        no|off|0|false|disabled)
+            {
+                pfctl -d
+                echo "$(date) [context] pfSense firewall disabled"
+            } >> "$LOG" 2>&1
             ;;
-        on|1|true|enabled)
+        yes|on|1|true|enabled)
             if pfctl -s info | grep -q 'Status: Disabled'; then
-                echo "$(date) [context] pfSense firewall was disabled, enabling now" >> "$LOG"
-                pfctl -e >> "$LOG" 2>&1
-                echo "$(date) [context] pfSense firewall enabled" >> "$LOG"
+                {
+                    echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
+                    pfctl -e
+                    echo "$(date) [context] pfSense firewall enabled"
+                } >> "$LOG" 2>&1
             fi
             ;;
         *)
@@ -417,8 +464,30 @@ fi
 # BGP-модуль 
 if [ -x /etc/context.d/bgp ]; then
     echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
+     # shellcheck disable=SC1091
     . /etc/context.d/bgp
     echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+fi
+
+
+# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
+if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
+    mkdir -p /root/.ssh
+    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
+        # кодируем ключ в base64 (без переносов строк)
+        ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
+        if xml sel -t -v "//user[name='admin']/authorizedkeys" "$xml_file" >/dev/null 2>&1; then
+            xml ed -L -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" "$xml_file"
+        else
+            xml ed -L -s "//user[name='admin']" -t elem -n "authorizedkeys" -v "$ENC_KEY" "$xml_file"
+        fi
+        echo "$(date) [context] SSH public key updated in config.xml" >> "$LOG"
+        echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+        chmod 700 /root/.ssh
+        echo "$(date) [context] SSH public key updated" >> "$LOG"
+        #RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
+    fi
 fi
 
 echo "$(date) [context] FINISH" >> "$LOG"

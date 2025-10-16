@@ -78,16 +78,22 @@ TMPPHP="/tmp/frr_apply.$$.php"
     fi
     
 # --- FRR global options from context ----------------------------------------
-#: "${BGP_ENABLE:=on}"
+if [ -n "${BGP_ENABLE}" ] && [ "${BGP_ENABLE}" = "YES" ]; then
+  BGP_ENABLE="on"; 
+  BGP_ROUTER_ID=$(ifconfig | awk '/^[a-z]/ {sub(":", "", $1); iface=$1} /description:[[:space:]]*WAN/ {wan=iface} /^[[:space:]]*inet / && iface==wan {print $2}')
+else 
+  BGP_ENABLE="off"; 
+fi
+
 #: "${BGP_AS:-}"
-: "${BGP_ROUTER_ID:=}"
 #: "${BGP_NEIGHBORS:=2.2.2.2,65115,mAE9e0SOB4tb1uQH6 11.123.12.2,65115,mAE9e0SOB4tb1uQH6}"
-#: "${BGP_RMAP_DEFAULT:=ALL}"
+: "${BGP_RMAP_DEFAULT:=ALL}"
 : "${BGP_REDIST_CONNECTED:=no}"
 : "${BGP_REDIST_STATIC:=no}"
 : "${BGP_REDIST_KERNEL:=no}"
 : "${BGP_ADJACENCY_LOG:=on}"
 #: "${BGP_NETWORKS_TO_DISTRIBUTE:=3.3.3.0/29,ALL 4.4.4.0/24,ALL}"
+BGP_NETWORKS_TO_DISTRIBUTE=$(echo "$BGP_NETWORKS_TO_DISTRIBUTE" | sed -E 's/[^[:space:]]+/&\,ALL/g')
 : "${FRR_ENABLE:=on}"                               # on| (пусто)
 : "${FRR_DEFAULT_ROUTER_ID:=${BGP_ROUTER_ID:-}}"    # глобальный RID (UI: Default Router ID)
 #: "${FRR_MASTER_PASSWORD:=lhgklgkuyfgkiyu}"                        # UI: Master Password
