@@ -344,7 +344,6 @@ if [ "$hash1" != "$hash2" ]; then
     }>> "$LOG"
     RC_RELOAD_IFACE="on"
 fi
-
 # получаем шлюз WAN из контекстных переменных
 for ifeth in $(ifconfig -l); do
     eth_mac=$(ifconfig "$ifeth" | awk '/ether/ {print $2}')
@@ -444,7 +443,6 @@ fi
             echo "$(date) [context] pfSense services restarted"
         } >>"$LOG" 2>&1
     fi
-    
     # Перезагрузка интерфейсов pfSense (если указано в контексте)
     if [ "${RC_RELOAD_IFACE}" = "on" ]; then
         echo "$(date) [context]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
