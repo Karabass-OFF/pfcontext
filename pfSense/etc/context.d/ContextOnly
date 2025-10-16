@@ -412,16 +412,20 @@ fi
     # Перезагрузка служб pfSense (если указано в контексте)
     if [ "${RC_RELOAD_ALL}" = "on" ]; then
         # Перезагружаем службы pfSense
-        /etc/rc.reload_all start >> "$LOG" 2>&1
-        echo "$(date) [context] pfSense services reloaded" >> "$LOG"
-        pfSsh.php playback restartallwan >> "$LOG" 2>&1
-        echo "$(date) [context] pfSense services restarted" >> "$LOG"
+       {
+            /etc/rc.reload_all start
+            echo "$(date) [context] pfSense services reloaded"
+            pfSsh.php playback restartallwan
+            echo "$(date) [context] pfSense services restarted"
+        } >>"$LOG" 2>&1
     fi
     # Перезагрузка интерфейсов pfSense (если указано в контексте)
     if [ "${RC_RELOAD_IFACE}" = "on" ] || [ -n "${PID}" ]; then
         # Перезагружаем интерфейсы pfSense
-        pfSsh.php playback restartallwan >> "$LOG" 2>&1
-        echo "$(date) [context] pfSense services restarted" >> "$LOG"
+        {
+            pfSsh.php playback restartallwan
+            echo "$(date) [context] pfSense services restarted"
+        } >>"$LOG" 2>&1
     fi
 
 echo "$(date) [context] pfSense firewall switch = ${PFCTL}" >> "$LOG"
@@ -431,14 +435,18 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
         no|off|0|false|disabled)
-            pfctl -d >> "$LOG" 2>&1
-            echo "$(date) [context] pfSense firewall disabled" >> "$LOG"
+            {
+                pfctl -d
+                echo "$(date) [context] pfSense firewall disabled"
+            } >> "$LOG" 2>&1
             ;;
         yes|on|1|true|enabled)
             if pfctl -s info | grep -q 'Status: Disabled'; then
-                echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'" >> "$LOG"
-                pfctl -e >> "$LOG" 2>&1
-                echo "$(date) [context] pfSense firewall enabled" >> "$LOG"
+                {
+                    echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
+                    pfctl -e
+                    echo "$(date) [context] pfSense firewall enabled"
+                } >> "$LOG" 2>&1
             fi
             ;;
         *)
@@ -456,6 +464,7 @@ fi
 # BGP-модуль 
 if [ -x /etc/context.d/bgp ]; then
     echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
+     # shellcheck disable=SC1091
     . /etc/context.d/bgp
     echo "$(date) [context] BGP module (return $?)" >> "$LOG"
 fi
