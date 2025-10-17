@@ -12,7 +12,7 @@ CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
 backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-# shellcheck source=modules/interfaces.sh
+# shellcheck disable=SC1091
 . "$SCRIPT_DIR/modules/interfaces.sh"
 
 echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
@@ -45,7 +45,7 @@ else
 fi
 ###################################################################################
 # Функция для настройки интерфейсов по MAC-адресам (без удаления существующих)
-configure_interfaces_by_mac
+configure_interfaces_by_mac "$xml_file" "$backup_xml_file"
 # DNS (берем из всех ETHx_DNS, если указаны)
 # Собираем все DNS в одну строку
 all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | sort -u | while read -r var; do eval "echo \${$var:-}"; done | xargs)

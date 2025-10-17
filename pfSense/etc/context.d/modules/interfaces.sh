@@ -2,12 +2,15 @@
 
 
 configure_interfaces_by_mac() {
+    fn_xml_file="$1"
+    fn_backup_xml_file="$2"
+
     # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
     iface_type_changed=false
     added_if_count=0
     # Проверяем, есть ли новые ETHx_* переменные против текущего config.xml
     ctx_if_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_MAC' | sort -u | wc -l | awk '{print $1}')
-    xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$xml_file" 2>/dev/null || echo 0)
+    xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$fn_xml_file" 2>/dev/null || echo 0)
     if [ "$ctx_if_count" -gt "$xml_if_count" ]; then
         iface_type_changed=true
         echo "$(date) [context-interfaces] Detected $ctx_if_count ETHx entries > $xml_if_count XML entries — rebuild required" >> "$LOG"
@@ -54,7 +57,7 @@ configure_interfaces_by_mac() {
     # Если есть новые интерфейсы или изменились типы, перенастраиваем
     # все интерфейсы заново (удаляем все из config.xml и добавляем по новой)
     if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
-        xml ed -L -d "//interfaces/*" "$backup_xml_file"
+        xml ed -L -d "//interfaces/*" "$fn_backup_xml_file"
         sys_ifaces=$(ifconfig -l)
         lan_assigned=false
         wan_assigned=false
@@ -199,12 +202,12 @@ configure_interfaces_by_mac() {
                             -s "//interfaces/$network" -t elem -n "if" -v "$iface" \
                             -s "//interfaces/$network" -t elem -n "spoofmac" -v "$ctx_mac" \
                             -s "//interfaces/$network" -t elem -n "subnet" -v "$prefix" \
-                            "$backup_xml_file"
+                            "$fn_backup_xml_file"
                         # Защита от проблем с XML-парсером pfSense (CDATA и пустой enable)
                         sed -i '' \
                             -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
                             -e 's|<enable>YES</enable>|<enable></enable>|g' \
-                            "$backup_xml_file"
+                            "$fn_backup_xml_file"
                     fi
                 fi
             done
@@ -212,4 +215,5 @@ configure_interfaces_by_mac() {
     fi
     echo "$(date) [context-interfaces] Total interfaces configured: $added_if_count" >> "$LOG"
     # --- /СЕТИ ---------------------------------------------------------------
+    unset fn_xml_file fn_backup_xml_file
 }
