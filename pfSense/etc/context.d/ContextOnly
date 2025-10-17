@@ -209,47 +209,17 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
                             desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                             ;;
                     esac 
-                else # Тип не указан — авто-назначение
-                    # Если IP из приватного диапазона, пытаемся назначить LAN
-                    if echo "$ip_addr" | grep -Eq '^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.' ; then
-                        # Приватный IP
-                        if [ "$lan_assigned" = "false" ] && [ "$lan_pending" -eq 0 ]; then
-                            network="lan"
-                            desc="LAN"
-                            lan_assigned=true
-                            used_networks="$used_networks $network"
-                        else # LAN уже назначен или ожидается — выдаем OPT
-                            candidate="opt$next_opt"
-                            # Ищем свободный OPT
-                            while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
-                                next_opt=$((next_opt + 1))
-                                candidate="opt$next_opt"
-                            done
-                            network="$candidate"
-                            used_networks="$used_networks $network"
-                            next_opt=$((next_opt + 1))
-                            desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
-                        fi
-                    else 
-                        # Публичный IP — пытаемся назначить WAN
-                        if [ "$wan_assigned" = "false" ] && [ "$wan_pending" -eq 0 ]; then
-                            network="wan"
-                            desc="WAN"
-                            wan_assigned=true
-                            used_networks="$used_networks $network"
-                        else # WAN уже назначен или ожидается — выдаем OPT
-                            candidate="opt$next_opt"
-                            # Ищем свободный OPT
-                            while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
-                                next_opt=$((next_opt + 1))
-                                candidate="opt$next_opt"
-                            done
-                            network="$candidate"
-                            used_networks="$used_networks $network"
-                            next_opt=$((next_opt + 1))
-                            desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
-                        fi
-                    fi
+                else # Тип не указан — выдаем следующий свободный OPT
+                    candidate="opt$next_opt"
+                    # Ищем свободный OPT
+                    while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                        next_opt=$((next_opt + 1))
+                        candidate="opt$next_opt"
+                    done
+                    network="$candidate"
+                    used_networks="$used_networks $network"
+                    next_opt=$((next_opt + 1))
+                    desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                 fi
                 # Конфигурируем интерфейс
                 if [ -n "$ip_addr" ] && [ -n "$mask" ]; then
@@ -348,21 +318,21 @@ if [ "$hash1" != "$hash2" ]; then
     }>> "$LOG"
     RC_RELOAD_IFACE="on"
 fi
-# получаем шлюз WAN из контекстных переменных
+# получаем шлюз WAN из контекстных переменных по MAC адресу интерфейса WAN 
 for ifeth in $(ifconfig -l); do
     eth_mac=$(ifconfig "$ifeth" | awk '/ether/ {print $2}')
     [ -n "$eth_mac" ] || continue
     if ifconfig "$ifeth" | grep -q 'description: WAN' ; then
-        echo "$(date) [context] Found WAN interface $ifeth (MAC=$eth_mac)" 
+        echo "$(date) [context] Found WAN interface $ifeth (MAC=$eth_mac)" >> "$LOG"
         eth=$(set | grep "ETH" | grep -i "$eth_mac" | cut -d "_" -f 1 )
-        WAN_GATEWAY=$(set | grep $eth"_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
-        echo "$(date) [context] Detected WAN_GATEWAY=$WAN_GATEWAY from $eth" 
+        WAN_GATEWAY=$(set | grep "$eth""_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
+        echo "$(date) [context] Detected WAN_GATEWAY=$WAN_GATEWAY from $eth" >> "$LOG"
     fi
 done
 # Настраиваем шлюз по умолчанию для WAN ecли он указан и отличается от текущего       
-if [ "$current_gw" = "$WAN_GATEWAY" ]; then
+if [ -n "$WAN_GATEWAY" ]; then
     network="wan"
-    if [ "$current_gw" != "$WAN_GATEWAY" ] && [ "${BGP_ENABLE}" != "YES" ]; then # Меняем шлюз, только если он отличается от текущего и BGP выключен
+    if [ "$current_gw" != "$WAN_GATEWAY" ] || [ "${BGP_ENABLE}" != "YES" ]; then # Меняем шлюз, только если он отличается от текущего и BGP выключен
         echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $WAN_GATEWAY — updating route (BGP off)" >> "$LOG"
         route delete default >/dev/null 2>&1
         route add default "$WAN_GATEWAY"
