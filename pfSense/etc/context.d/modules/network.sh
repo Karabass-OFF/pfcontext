@@ -7,20 +7,16 @@
 apply_dns_settings() {
     backup_xml_file="$1"
     log_file="$2"
-
     all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | sort -u | while read -r var; do
         eval "echo \${$var:-}"
     done | xargs)
-
     if [ -n "$all_dns" ]; then
         dns1=$(echo "$all_dns" | awk '{print $1}')
         dns2=$(echo "$all_dns" | awk '{print $NF}')
-
         echo "$(date) [context-network:apply_dns_settings] Setting DNS: $dns1 $dns2" >> "$log_file"
         : > /etc/resolv.conf
         [ -n "$dns1" ] && echo "nameserver $dns1" >> /etc/resolv.conf
         [ -n "$dns2" ] && echo "nameserver $dns2" >> /etc/resolv.conf
-
         xml ed -L \
             -u "//system/dnsserver[1]" -v "$dns1" \
             -u "//system/dnsserver[2]" -v "$dns2" \
@@ -34,7 +30,6 @@ apply_dns_settings() {
 apply_hostname_setting() {
     backup_xml_file="$1"
     log_file="$2"
-
     if [ -n "${SET_HOSTNAME:-}" ]; then
         hostname "$SET_HOSTNAME"
         xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
@@ -46,12 +41,9 @@ update_interface_reload_flag() {
     xml_file="$1"
     backup_xml_file="$2"
     log_file="$3"
-
     : "${RC_RELOAD_IFACE:=off}"
-
     hash1="$(xml sel -t -c "//interfaces" "$xml_file" | md5)"
     hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | md5)"
-
     if [ "$hash1" != "$hash2" ]; then
         {
             echo "$(date) [context-network:update_interface_reload_flag] Interfaces section changed, need to reload interfaces"
@@ -66,7 +58,6 @@ detect_wan_network() {
     log_file="$1"
     WAN_GATEWAY=""
     WAN_NETWORK=""
-
     for ifeth in $(ifconfig -l); do
         eth_mac=$(ifconfig "$ifeth" | awk '/ether/ {print $2}')
         [ -n "$eth_mac" ] || continue
@@ -87,10 +78,8 @@ apply_wan_gateway() {
     current_gw="$4"
     wan_gateway="$5"
     wan_network="$6"
-
     [ -n "$wan_gateway" ] || return 0
     network="${wan_network:-wan}"
-
     if [ "$current_gw" != "$wan_gateway" ]; then
         echo "$(date) [context-network:apply_wan_gateway] Current default gateway: ${current_gw:-"(none)"} differs from desired: $wan_gateway — updating route (BGP off)" >> "$log_file"
         route delete default >/dev/null 2>&1
@@ -100,11 +89,9 @@ apply_wan_gateway() {
             echo "$(date) [context] Gateways section missing — creating one" >> "$log_file"
             xml ed -L -s "//pfsense" -t elem -n "gateways" -v "" "$backup_xml_file"
         fi
-
         xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
         xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
         xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
-
         xml ed -L \
             -s "//gateways" -t elem -n "gateway_item" -v "" \
             -s "//gateways/gateway_item[last()]" -t elem -n "interface" -v "$network" \
@@ -115,7 +102,6 @@ apply_wan_gateway() {
             -s "//gateways/gateway_item[last()]" -t elem -n "weight" -v "1" \
             -u "//gateways/defaultgw4" -v "WANGW" \
             "$backup_xml_file"
-
         if xml sel -t -v "//interfaces/$network/gateway" "$backup_xml_file" >/dev/null 2>&1; then
             xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" "$backup_xml_file"
         else
@@ -130,7 +116,6 @@ handle_bgp_default_route() {
     backup_xml_file="$1"
     log_file="$2"
     wan_gateway="$3"
-
     if [ "${BGP_ENABLE}" = "YES" ]; then
         echo "$(date) [context-network:handle_bgp_default_route] BGP is enabled, removing default route: $wan_gateway because BGP will manage it" >> "$log_file"
         route delete default >/dev/null 2>&1
@@ -146,9 +131,7 @@ apply_wan_filters() {
     backup_xml_file="$1"
     log_file="$2"
     network="$3"
-
     [ -n "$network" ] || return 0
-
     if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
         xml ed -L \
             -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
@@ -189,7 +172,6 @@ restart_interfaces_if_requested() {
 
 apply_pfctl_state() {
     log_file="$1"
-
     echo "$(date) [context-network:apply_pfctl_state] pfSense firewall switch = ${PFCTL}" >> "$log_file"
     if [ -n "${PFCTL:-}" ]; then
         _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
