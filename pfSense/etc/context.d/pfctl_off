@@ -8,7 +8,7 @@ PERIOD=6   # 6 раз за минуту
 
 # Проверяем наличие PID-файла
  [ -f "$PFPID_FILE" ] || exit 0
-
+# shellcheck disable=SC2034  # i is intentionally unused
  for i in $(seq 1 $PERIOD); do
      if pfctl -s info 2>/dev/null | grep -qi 'Status: Enabled'; then
          pfctl -d >> "$LOG" 2>&1
@@ -16,6 +16,4 @@ PERIOD=6   # 6 раз за минуту
       fi
      sleep 10
   done
-
-
 

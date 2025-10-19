@@ -14,6 +14,8 @@ backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/modules/interfaces.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/modules/network.sh"
 
 echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
@@ -43,35 +45,13 @@ else
     echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
     exit 0
 fi
-###################################################################################
-# Функция для настройки интерфейсов по MAC-адресам (без удаления существующих)
+# --- ОСНОВНЫЕ ФУНКЦИИ ------------------------------------------------------
+# Настройка интерфейсов по MAC-адресам
 configure_interfaces_by_mac "$xml_file" "$backup_xml_file"
-# DNS (берем из всех ETHx_DNS, если указаны)
-# Собираем все DNS в одну строку
-all_dns=$(set | grep -oE '^ETH[0-9]+_DNS' | sort -u | while read -r var; do eval "echo \${$var:-}"; done | xargs)
-if [ -n "$all_dns" ]; then # Если есть хотя бы один DNS
-    # Берем первый и последний из списка
-    dns1=$(echo "$all_dns" | awk '{print $1}')
-    dns2=$(echo "$all_dns" | awk '{print $NF}')
-    # Обновляем /etc/resolv.conf
-    echo "$(date) [context] Setting DNS: $dns1 $dns2" >> "$LOG"
-    : > /etc/resolv.conf
-    [ -n "$dns1" ] && echo "nameserver $dns1" >> /etc/resolv.conf
-    [ -n "$dns2" ] && echo "nameserver $dns2" >> /etc/resolv.conf
-    # Обновляем DNS в config.xml (если указаны)
-    xml ed -L \
-        -u "//system/dnsserver[1]" -v "$dns1" \
-        -u "//system/dnsserver[2]" -v "$dns2" \
-        -u "//system/dnsallowoverride" -v "" \
-        "$backup_xml_file"
-    echo "$(date) [context] Set DNS: $dns1 $dns2" >> "$LOG"
-fi
-# Hostname (если указана переменная SET_HOSTNAME)
-if [ -n "${SET_HOSTNAME:-}" ]; then
-    hostname "$SET_HOSTNAME"
-    xml ed -L -u "//system/hostname" -v "$SET_HOSTNAME" "$backup_xml_file"
-    echo "$(date) [context] Set hostname: $SET_HOSTNAME" >> "$LOG"
-fi
+# Применение настроек DNS
+apply_dns_settings "$backup_xml_file" "$LOG"
+# Применение настроек hostname
+apply_hostname_setting "$backup_xml_file" "$LOG"
 # --- Password override logic ---
 if [ -n "${PASSWORD_ROOT}" ]; then
     PASSWORD="${PASSWORD_ROOT}"
@@ -95,104 +75,17 @@ else
         echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
     fi
 fi
-###################################################################################
-# --- BGP ENABLE / DISABLE LOGIC ( REMOVE DEFAULT GATEWAY IF BGP IS ENABLED ) --- #
-#                   --- BOGON / PRIVATE NETWORKS LOGIC ---                        #
-###################################################################################
-# если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
-# RC_RELOAD_IFACE=on|off (по умолчанию off)
-: "${RC_RELOAD_IFACE:=off}"
-hash1="$(xml sel -t -c "//interfaces" "$xml_file" | md5)"
-hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | md5)"
-if [ "$hash1" != "$hash2" ]; then
-   { echo "$(date) [context] Interfaces section changed, need to reload interfaces" 
-     echo "$(date) [context] Old hash: $hash1" 
-     echo "$(date) [context] New hash: $hash2" 
-    }>> "$LOG"
-    RC_RELOAD_IFACE="on"
-fi
-# получаем шлюз WAN из контекстных переменных по MAC адресу интерфейса WAN 
-for ifeth in $(ifconfig -l); do
-    eth_mac=$(ifconfig "$ifeth" | awk '/ether/ {print $2}')
-    [ -n "$eth_mac" ] || continue
-    if ifconfig "$ifeth" | grep -q 'description: WAN' ; then
-        echo "$(date) [context] Found WAN interface $ifeth (MAC=$eth_mac)" >> "$LOG"
-        eth=$(set | grep "ETH" | grep -i "$eth_mac" | cut -d "_" -f 1 )
-        WAN_GATEWAY=$(set | grep "$eth""_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
-        echo "$(date) [context] Detected WAN_GATEWAY=$WAN_GATEWAY from $eth" >> "$LOG"
-    fi
-done
-# Настраиваем шлюз по умолчанию для WAN ecли он указан и отличается от текущего       
-if [ -n "$WAN_GATEWAY" ]; then
-    network="wan"
-    if [ "$current_gw" != "$WAN_GATEWAY" ]; then # Меняем шлюз, только если он отличается от текущего и BGP выключен
-        echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $WAN_GATEWAY — updating route (BGP off)" >> "$LOG"
-        route delete default >/dev/null 2>&1
-        route add default "$WAN_GATEWAY"
-        # --- Проверяем, есть ли секция <gateways> ---
-        if ! xml sel -t -v "//gateways" "$backup_xml_file" >/dev/null 2>&1; then
-            echo "$(date) [context] Gateways section missing — creating one" >> "$LOG"
-            xml ed -L -s "//pfsense" -t elem -n "gateways" -v "" "$backup_xml_file"
-        fi
-        # Удаляем возможный старый шлюз перед добавлением нового
-        xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
-        xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
-        xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
-        # Добавляем шлюз в config.xml
-        xml ed -L \
-            -s "//gateways" -t elem -n "gateway_item" -v "" \
-            -s "//gateways/gateway_item[last()]" -t elem -n "interface" -v "$network" \
-            -s "//gateways/gateway_item[last()]" -t elem -n "gateway" -v "$WAN_GATEWAY" \
-            -s "//gateways/gateway_item[last()]" -t elem -n "name" -v "WANGW" \
-            -s "//gateways/gateway_item[last()]" -t elem -n "descr" -v "Default IPv4 Gateway" \
-            -s "//gateways/gateway_item[last()]" -t elem -n "defaultgw4" -v "yes" \
-            -s "//gateways/gateway_item[last()]" -t elem -n "weight" -v "1" \
-            -u "//gateways/defaultgw4" -v "WANGW" \
-            "$backup_xml_file"
-        # Привязываем шлюз WANGW к интерфейсу WAN, если его нет
-        if xml sel -t -v "//interfaces/$network/gateway" "$backup_xml_file" >/dev/null 2>&1; then
-            xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" "$backup_xml_file"
-        else
-            xml ed -L -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" "$backup_xml_file"
-        fi 
-    elif [ "$current_gw" = "$WAN_GATEWAY" ]; then # Шлюз уже установлен и совпадает с нужным 
-        echo "$(date) [context] Current default gateway: $current_gw matches desired: $WAN_GATEWAY — no change needed" >> "$LOG"
-    fi
-fi
-# если BGP включен, удаляем маршрут по умолчанию, чтобы BGP управлял маршрутом
-# BGP_ENABLE=YES|NO (по умолчанию NO)
-if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
-    echo "$(date) [context] BGP is enabled, removing default route: $WAN_GATEWAY because BGP will manage it" >> "$LOG"
-    route delete default >/dev/null 2>&1
-    # Удаляем старый шлюз из config.xml, если он есть
-    xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
-    xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
-    xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
-fi
-# Отключаем/Включаем private networks для WAN
-if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
-    xml ed -L \
-        -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
-        "$backup_xml_file"
-    echo "$(date) [context] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
-else
-    xml ed -L \
-        -d "//interfaces/$network/blockbogons" \
-        "$backup_xml_file"
-    echo "$(date) [context] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
-fi
-# Отключаем/Включаем bogon networks для WAN
-if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
-    xml ed -L \
-        -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
-        "$backup_xml_file"
-    echo "$(date) [context-network] BLOCK_BOGON_NETWORKS" >> "$LOG"
-else
-    xml ed -L \
-        -d "//interfaces/$network/blockpriv" \
-        "$backup_xml_file"
-    echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
-fi
+
+# Проверка изменений в разделе interfaces и установка флага перезагрузки интерфейсов
+update_interface_reload_flag "$xml_file" "$backup_xml_file" "$LOG"
+# Определение WAN-сети и шлюза
+detect_wan_network "$LOG"
+# Применение шлюза WAN, если он отличается от текущего
+apply_wan_gateway "$xml_file" "$backup_xml_file" "$LOG" "$current_gw" "$WAN_GATEWAY" "$WAN_NETWORK"
+# Применение фильтров WAN
+handle_bgp_default_route "$backup_xml_file" "$LOG" "$WAN_GATEWAY"
+apply_wan_filters "$backup_xml_file" "$LOG" "$WAN_NETWORK"
+
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
     rm -f "$backup_xml_file"
@@ -210,41 +103,7 @@ if [ "${RC_RELOAD_ALL}" = "on" ]; then
         echo "$(date) [context] pfSense services restarted"
     } >>"$LOG" 2>&1
 fi
-# Перезагрузка интерфейсов pfSense (если указано в контексте)
-if [ "${RC_RELOAD_IFACE}" = "on" ]; then
-    echo "$(date) [context]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
-    # Перезагружаем интерфейсы pfSense
-    {   pfSsh.php playback restartallwan
-        echo "$(date) [context] pfSense services restarted"
-    } >>"$LOG" 2>&1
-fi
-# --- FIREWALL -------------------------------------------------------------
-# отключение/включение pfSense firewall (pfctl) 
-echo "$(date) [context] pfSense firewall switch = ${PFCTL}" >> "$LOG"
-if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указана
-    # Приводим значение к нижнему регистру для удобства сравнения   
-    _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
-    case "$_lc_pfctl" in
-        no|off|0|false|disabled)
-            {
-                pfctl -d
-                echo "$(date) [context] pfSense firewall disabled"
-            } >> "$LOG" 2>&1
-            ;;
-        yes|on|1|true|enabled)
-            if pfctl -s info | grep -q 'Status: Disabled'; then
-                {
-                    echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
-                    pfctl -e
-                    echo "$(date) [context] pfSense firewall enabled"
-                } >> "$LOG" 2>&1
-            fi
-            ;;
-        *)
-            echo "$(date) [context] pfSense firewall state unchanged (PFCTL=$_lc_pfctl)" >> "$LOG"
-            ;;
-    esac
-fi
+
 # Отмонтировать диск после выполнения всех операций
 if mount | grep -q "on $CONTEXT_MOUNT "; then
     umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
@@ -259,6 +118,9 @@ if [ -x /etc/context.d/bgp ]; then
     . /etc/context.d/bgp
     echo "$(date) [context] BGP module (return $?)" >> "$LOG"
 fi
+
+restart_interfaces_if_requested "$LOG" "$PID"
+apply_pfctl_state "$LOG"
 
 # SSH ключ (если указана переменная SSH_PUBLIC_KEY)
 if [ -n "${SSH_PUBLIC_KEY:-}" ]; then

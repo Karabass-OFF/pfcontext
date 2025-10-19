@@ -68,16 +68,13 @@ TMPPHP="/tmp/frr_apply.$$.php"
         # Перезапускаем FRR, чтобы подхватить новый vtysh.conf  
         #/usr/local/etc/rc.d/frr restart || /usr/local/etc/rc.d/frr start
         #log "FRR restarted after generating vtysh.conf"
-    
 }
-
     if [ ! -f /var/etc/frr/vtysh.conf ]; then
     log "vtysh.conf not found, generating via ensure_frr_vtysh_conf function and restarting FRR"
         ensure_frr_vtysh_conf # Вызов функции обеспечения vtysh.conf 
     else # vtysh.conf уже есть
         log "vtysh.conf already exists, skip generation" 
     fi
-    
 # --- FRR global options from context ----------------------------------------
 if [ -n "${BGP_ENABLE}" ] && [ "${BGP_ENABLE}" = "YES" ]; then
   BGP_ENABLE="on"; 
@@ -86,7 +83,6 @@ else
   BGP_ENABLE="off"; 
   return 0; # BGP не включён, выходим
 fi
-
 #: "${BGP_AS:-}"
 #: "${BGP_NEIGHBORS:=2.2.2.2,65115,mAE9e0SOB4tb1uQH6 11.123.12.2,65115,mAE9e0SOB4tb1uQH6}"
 : "${BGP_RMAP_DEFAULT:=ALL}"
@@ -150,7 +146,6 @@ ESC_FRR_MASTER_PASS=$(printf "%s" "$FRR_MASTER_PASSWORD" | sed "s/'/\\\\'/g")
 [ -n "$BGP_AS" ] && [ -n "$BGP_ROUTER_ID" ] || { log "BGP_AS or BGP_ROUTER_ID empty"; return 0; }
 # Файл для хранения хэша состояния
 STATE_HASH_FILE="/var/run/context-bgp.hash"
-
 # Нормализуем списки (убираем повторы пробелов/точки с запятой, сортируем)
 norm_neighbors=$(
   printf "%s" "$BGP_NEIGHBORS" \
@@ -310,7 +305,6 @@ if ! "$PHPBIN" -d display_errors=1 "$TMPPHP" >>"$LOG" 2>&1; then
 fi
 # Удаляем временный файл
 rm -f "$TMPPHP" 
-
 # --- 4) Apply via vtysh ---------------------------------------------------------
 # Применяем конфигурацию в FRR через vtysh (live-apply) 
 VTYSH="/usr/local/bin/vtysh"
