@@ -4,7 +4,7 @@
 
 set -eu
 #LOG="/dev/null"  # set to /var/log/context-bgp.log for debug
-LOGBGP="/var/log/context-bgp.log"
+LOGBGP="/var/log/context.log"
 log() {
   ts=$(date +"%Y-%m-%d %H:%M:%S")
   printf "%s [context-bgp] BGP: %s\n" "$ts" "$*" >> "$LOGBGP" 2>/dev/null
