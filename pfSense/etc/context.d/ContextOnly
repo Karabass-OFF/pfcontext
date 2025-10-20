@@ -16,6 +16,8 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/modules/interfaces.sh"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/modules/network.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/modules/firewall.sh"
 
 echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
@@ -85,6 +87,9 @@ apply_wan_gateway "$xml_file" "$backup_xml_file" "$LOG" "$current_gw" "$WAN_GATE
 # Применение фильтров WAN
 handle_bgp_default_route "$backup_xml_file" "$LOG" "$WAN_GATEWAY"
 apply_wan_filters "$backup_xml_file" "$LOG" "$WAN_NETWORK"
+# Применение настроек файрвола для интерфейса управления (MGMT_INTERFACE)
+FIREWALL_LOG="${FIREWALL_LOG:-/var/log/context.log}"
+apply_management_interface_firewall "$backup_xml_file"
 
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
