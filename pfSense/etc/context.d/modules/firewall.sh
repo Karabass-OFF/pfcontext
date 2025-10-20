@@ -1,6 +1,7 @@
 #!/bin/sh
 #
 # Firewall helper functions for configuring management-only interfaces.
+# shellcheck shell=sh disable=SC3043
 
 : "${FIREWALL_LOG:=/var/log/context-firewall.log}"
 FIREWALL_TAG="[context-firewall]"
