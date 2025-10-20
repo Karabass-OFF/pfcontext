@@ -3,9 +3,9 @@
 # Firewall helper functions for configuring management-only interfaces.
 # shellcheck shell=sh disable=SC3043
 
-: "${FIREWALL_LOG:=/var/log/context-firewall.log}"
+: "${FIREWALL_LOG:=/var/log/context.log}"
 FIREWALL_TAG="[context-firewall]"
-
+# Функция для записи логов файрвола
 firewall_log() {
     local level message
     level="$1"
@@ -14,7 +14,7 @@ firewall_log() {
     mkdir -p "$(dirname "$FIREWALL_LOG")"
     printf '%s %s [%s] %s\n' "$(date)" "$FIREWALL_TAG" "$level" "$message" >>"$FIREWALL_LOG"
 }
-
+# Функция для обеспечения наличия секции <filter> в config.xml
 ensure_filter_section() {
     local xml_file="$1"
     local filter_count
@@ -29,7 +29,7 @@ ensure_filter_section() {
     fi
     return 0
 }
-
+# Функция для удаления предыдущих правил управления с интерфейса управления
 remove_management_rules() {
     local xml_file="$1"
     local interface="$2"
@@ -45,7 +45,7 @@ remove_management_rules() {
     fi
     return 0
 }
-
+# Функция для удаления стандартных правил разрешающего доступа с интерфейса управления
 remove_default_allow_rules() {
     local xml_file="$1"
     local interface="$2"
@@ -64,6 +64,7 @@ remove_default_allow_rules() {
     return 0
 }
 
+# Функция для добавления правила разрешающего доступа к интерфейсу управления 
 append_management_allow_rule() {
     local xml_file="$1"
     local interface="$2"
@@ -81,6 +82,8 @@ append_management_allow_rule() {
         -s "//filter/rule[last()]" -t elem -n "interface" -v "$interface" \
         -s "//filter/rule[last()]" -t elem -n "ipprotocol" -v "$ipprotocol" \
         -s "//filter/rule[last()]" -t elem -n "protocol" -v "$protocol" \
+        -s "//filter/rule[last()]" -t elem -n "direction" -v "in" \
+        -s "//filter/rule[last()]" -t elem -n "quick" -v "" \
         -s "//filter/rule[last()]" -t elem -n "source" -v "" \
         -s "//filter/rule[last()]/source" -t elem -n "network" -v "$source_network" \
         -s "//filter/rule[last()]" -t elem -n "destination" -v "" \
@@ -94,7 +97,7 @@ append_management_allow_rule() {
     firewall_log INFO "Added rule '${descr}' (protocol ${protocol} ${ipprotocol} port ${port})"
     return 0
 }
-
+# Функция для добавления правила блокировки исходящего трафика с интерфейса управления
 append_management_block_rule() {
     local xml_file="$1"
     local interface="$2"
@@ -107,6 +110,8 @@ append_management_block_rule() {
         -s "//filter/rule[last()]" -t elem -n "type" -v "block" \
         -s "//filter/rule[last()]" -t elem -n "interface" -v "$interface" \
         -s "//filter/rule[last()]" -t elem -n "ipprotocol" -v "$ipprotocol" \
+        -s "//filter/rule[last()]" -t elem -n "direction" -v "out" \
+        -s "//filter/rule[last()]" -t elem -n "quick" -v "" \
         -s "//filter/rule[last()]" -t elem -n "protocol" -v "any" \
         -s "//filter/rule[last()]" -t elem -n "source" -v "" \
         -s "//filter/rule[last()]/source" -t elem -n "network" -v "$source_network" \
@@ -120,7 +125,7 @@ append_management_block_rule() {
     firewall_log INFO "Added rule '${descr}'"
     return 0
 }
-
+# Функция для удаления статических маршрутов, связанных с интерфейсом управления
 remove_static_routes_for_interface() {
     local xml_file="$1"
     local interface="$2"
@@ -136,7 +141,7 @@ remove_static_routes_for_interface() {
     fi
     return 0
 }
-
+# Функция для удаления шлюза из интерфейса управления
 strip_interface_gateway() {
     local xml_file="$1"
     local interface="$2"
@@ -150,7 +155,7 @@ strip_interface_gateway() {
     fi
     return 0
 }
-
+# Основная функция для применения настроек файрвола к интерфейсу управления
 apply_management_interface_firewall() {
     local backup_xml_file="$1"
     local lockdown_flag="${MGMT_LOCKDOWN:-off}"

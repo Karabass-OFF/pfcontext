@@ -91,6 +91,9 @@ apply_wan_filters "$backup_xml_file" "$LOG" "$WAN_NETWORK"
 FIREWALL_LOG="${FIREWALL_LOG:-/var/log/context.log}"
 apply_management_interface_firewall "$backup_xml_file"
 
+pfctl -sr -vv | grep CTX-MGMT >> "$LOG" 2>&1
+
+
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
     rm -f "$backup_xml_file"
