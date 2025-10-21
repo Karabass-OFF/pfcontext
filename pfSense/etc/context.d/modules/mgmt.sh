@@ -1,26 +1,30 @@
 #!/bin/sh
 # -------------------------------------------------------------------
 # pfSense Management Interface Context Script (for OpenNebula)
-# Author: shaman edition (final stable IP-based version)
+# Author: shaman edition (final alias-based + safety fix)
 # -------------------------------------------------------------------
 # Controls management interface settings via OpenNebula context vars:
 #   MGMT_ENABLE=YES|NO
 #   MGMT_IF=lan|wan|optN
+#   MGMT_PORT=22,443,80,8443
 # -------------------------------------------------------------------
-
+# Инициализация переменных
 : "${MGMT_ENABLE:=NO}"
 : "${MGMT_IF:=lan}"
-LOG_FILE="/var/log/context-mgmt.log"
+: "${MGMT_PORT:=22,443}"
+LOG_FILE="/var/log/context.log"
 
+export MGMT_ENABLE MGMT_IF MGMT_PORT
+# функция логирования
 log() {
     printf '%s [MGMT] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
 }
-
+# функция выполнения PHP-кода
 apply_php() {
     /usr/local/bin/php -r "$1"
 }
-
-log "Starting Management Interface Context (MGMT_IF=${MGMT_IF}, MGMT_ENABLE=${MGMT_ENABLE})"
+# Начало выполнения скрипта
+log "Starting Management Interface Context (MGMT_IF=${MGMT_IF}, MGMT_ENABLE=${MGMT_ENABLE}, MGMT_PORT=${MGMT_PORT})"
 
 # -------------------------------------------------------------------
 # Resolve pfSense logical interface name (lan/wan/optX) to real OS IF
@@ -41,13 +45,14 @@ while [ "$REAL_IF" = "$MGMT_IF" ] && [ $RETRIES -gt 0 ]; do
         echo \$real ?: '${MGMT_IF}';
     ")
     RETRIES=$((RETRIES - 1))
+    log "Retries left: $RETRIES"
 done
-
+# Если не удалось разрешить интерфейс, выходим с ошибкой
 if [ "$REAL_IF" = "$MGMT_IF" ]; then
     log "Error: Unable to resolve real interface for ${MGMT_IF}"
     exit 1
 fi
-
+# Логируем результат разрешения интерфейса
 log "Resolved pfSense interface ${MGMT_IF} -> ${REAL_IF}"
 
 # -------------------------------------------------------------------
@@ -56,7 +61,7 @@ log "Resolved pfSense interface ${MGMT_IF} -> ${REAL_IF}"
 if [ "$MGMT_ENABLE" = "YES" ]; then
     log "Enabling management interface $MGMT_IF ($REAL_IF)"
 
-    # 1️⃣ Убираем gateway (исключаем из маршрутизации)
+    # Убираем gateway (исключаем из маршрутизации)
     log "Removing gateway from $MGMT_IF"
     apply_php "
         require_once('interfaces.inc');
@@ -70,7 +75,48 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
         }
     "
 
-    # 2️⃣ Добавляем firewall правила, используя IP интерфейса
+    # Создаём / обновляем alias MGMT_PORTS
+    log "Updating alias [MGMT_PORTS] with ports: ${MGMT_PORT}"
+    apply_php "
+        require_once('util.inc');
+        require_once('filter.inc');
+        require_once('interfaces.inc');
+
+        \$alias_name  = 'MGMT_PORTS';
+        \$alias_descr = '[MGMT] Management Ports';
+        \$ports       = array_map('trim', explode(',', '${MGMT_PORT}'));
+
+        \$config = parse_config(true);
+
+        // гарантируем наличие структуры aliases
+        if (!isset(\$config['aliases']) || !is_array(\$config['aliases'])) {
+            \$config['aliases'] = array();
+        }
+        if (!isset(\$config['aliases']['alias']) || !is_array(\$config['aliases']['alias'])) {
+            \$config['aliases']['alias'] = array();
+        }
+
+        // удаляем старый alias
+        \$config['aliases']['alias'] = array_values(array_filter(
+            \$config['aliases']['alias'],
+            function(\$a) use (\$alias_name) {
+                return !is_array(\$a) || (\$a['name'] ?? '') !== \$alias_name;
+            }
+        ));
+
+        // добавляем новый alias
+        \$config['aliases']['alias'][] = array(
+            'name'    => \$alias_name,
+            'type'    => 'port',
+            'address' => implode(' ', \$ports),
+            'descr'   => \$alias_descr
+        );
+
+        write_config('[MGMT] Updated alias MGMT_PORTS');
+        filter_configure();
+    "
+
+    # Добавляем firewall правила
     log "Adding [MGMT] firewall rules for $MGMT_IF"
     apply_php "
         require_once('filter.inc');
@@ -79,56 +125,57 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
         \$if = '${MGMT_IF}';
         \$config = parse_config(true);
 
-        // Получаем IP интерфейса (IPv4)
+        // получаем IP интерфейса
         \$ip = get_interface_ip(\$if);
         if (empty(\$ip)) {
-            \$ip = '127.0.0.1'; // fallback
+            \$ip = '127.0.0.1';
         }
 
-        // Удаляем старые [MGMT]-правила
+        // очищаем старые [MGMT]-правила
         if (isset(\$config['filter']['rule'])) {
             \$config['filter']['rule'] = array_values(array_filter(
                 \$config['filter']['rule'],
-                function (\$r) { return !isset(\$r['descr']) || strpos(\$r['descr'], '[MGMT]') === false; }
+                function(\$r) { return !isset(\$r['descr']) || strpos(\$r['descr'], '[MGMT]') === false; }
             ));
         } else {
             \$config['filter']['rule'] = array();
         }
 
-        // Правило 1: Разрешить ICMP (ping)
+        //  ICMP (ping)
         \$rule_icmp = array(
-            'type' => 'pass',
-            'interface' => \$if,
+            'type'       => 'pass',
+            'interface'  => \$if,
             'ipprotocol' => 'inet',
-            'protocol' => 'icmp',
-            'source' => array('network' => \$if),
-            'destination' => array('address' => \$ip),
-            'descr' => '[MGMT] Allow ICMP (ping)',
+            'protocol'   => 'icmp',
+            'source'     => array('network' => \$if),
+            'destination'=> array('address' => \$ip),
+            'descr'      => '[MGMT] Allow ICMP (ping)',
         );
 
-        // Правило 2: Разрешить TCP (22,443)
+        //  TCP (использует alias MGMT_PORTS)
         \$rule_tcp = array(
-            'type' => 'pass',
-            'interface' => \$if,
+            'type'       => 'pass',
+            'interface'  => \$if,
             'ipprotocol' => 'inet',
-            'protocol' => 'tcp',
-            'source' => array('network' => \$if),
-            'destination' => array('address' => \$ip),
-            'destinationport' => array('22', '443'),
-            'descr' => '[MGMT] Allow SSH/WebGUI',
+            'protocol'   => 'tcp',
+            'source'     => array('network' => \$if),
+            'destination'=> array(
+                'address' => \$ip,
+                'port'    => 'MGMT_PORTS'
+            ),
+            'descr'      => '[MGMT] Allow management ports (' . '${MGMT_PORT}' . ')',
         );
 
-        // Правило 3: Блокировать всё остальное
+        //  BLOCK всё остальное
         \$rule_block = array(
-            'type' => 'block',
-            'interface' => \$if,
+            'type'       => 'block',
+            'interface'  => \$if,
             'ipprotocol' => 'inet',
-            'source' => array('network' => \$if),
-            'destination' => array('any' => ''),
-            'descr' => '[MGMT] Block all other traffic',
+            'source'     => array('network' => \$if),
+            'destination'=> array('any' => ''),
+            'descr'      => '[MGMT] Block all other traffic',
         );
 
-        // Добавляем правила
         \$config['filter']['rule'][] = \$rule_icmp;
         \$config['filter']['rule'][] = \$rule_tcp;
         \$config['filter']['rule'][] = \$rule_block;
@@ -142,7 +189,7 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
 else
     log "Disabling management interface $MGMT_IF"
 
-    # Удаляем firewall правила [MGMT]
+    # удаляем firewall правила [MGMT]
     log "Removing [MGMT] firewall rules"
     apply_php "
         require_once('filter.inc');
@@ -150,14 +197,37 @@ else
         if (isset(\$config['filter']['rule'])) {
             \$config['filter']['rule'] = array_values(array_filter(
                 \$config['filter']['rule'],
-                function (\$r) { return !isset(\$r['descr']) || strpos(\$r['descr'], '[MGMT]') === false; }
+                function(\$r) { return !isset(\$r['descr']) || strpos(\$r['descr'], '[MGMT]') === false; }
             ));
             write_config('[MGMT] Removed management rules');
             filter_configure();
         }
     "
 
-    # Убираем gateway, если остался
+    # удаляем alias
+log "Removing alias [MGMT_PORTS]"
+apply_php "
+    require_once('util.inc');
+    require_once('filter.inc');
+    require_once('interfaces.inc');
+    \$config = parse_config(true);
+
+    // Удаляем alias из конфига
+    if (isset(\$config['aliases']['alias']) && is_array(\$config['aliases']['alias'])) {
+        \$config['aliases']['alias'] = array_values(array_filter(
+            \$config['aliases']['alias'],
+            function(\$a) { return !is_array(\$a) || (\$a['name'] ?? '') !== 'MGMT_PORTS'; }
+        ));
+        write_config('[MGMT] Removed alias MGMT_PORTS');
+    }
+
+    // Перегенерируем alias-файлы и правила
+    if (function_exists('filter_generate_aliases_config')) {
+        filter_generate_aliases_config();
+    }
+    filter_configure();
+"
+    # убираем gateway
     apply_php "
         require_once('interfaces.inc');
         require_once('system.inc');
