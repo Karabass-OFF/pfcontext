@@ -87,8 +87,6 @@ apply_wan_gateway "$xml_file" "$backup_xml_file" "$LOG" "$current_gw" "$WAN_GATE
 # Применение фильтров WAN
 handle_bgp_default_route "$backup_xml_file" "$LOG" "$WAN_GATEWAY"
 apply_wan_filters "$backup_xml_file" "$LOG" "$WAN_NETWORK"
-# Правила firewall для менеджмент-интерфейса
-prepare_mgmt_firewall_rules "$backup_xml_file" "$LOG"
 
 # Синхронизация config.xml (если есть изменения)
 if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
@@ -98,8 +96,6 @@ elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, ко
     cp "$backup_xml_file" "$xml_file"
     echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
 fi
-# Применение firewall после обновления конфигурации
-apply_mgmt_firewall_runtime "$LOG"
 # Перезагрузка служб pfSense (если указано в контексте)
 if [ "${RC_RELOAD_ALL}" = "on" ]; then
     # Перезагружаем службы pfSense

@@ -53,8 +53,6 @@
 ### Сеть
 - `ETHx_MAC` — привязка интерфейса к MAC-адресу на хосте.
 - `ETHx_TYPE` — требуемая роль (`lan`, `wan`, `optN`), определяет раздел `<interfaces>`.
-- `ETHx_TYPE="mgmt"` — назначает интерфейс в качестве управленческого, принудительно помечая его как OPT с описанием `MGMT` и
-  сохраняя IP для автоматического создания правил доступа.
 - `ETHx_IP` / `ETHx_MASK` — IPv4-адрес и маска, записываемые в `config.xml`.
 - `ETHx_GATEWAY` — шлюз по умолчанию для WAN-интерфейса.
 - `ETHx_DNS` — список DNS-серверов, применяемых к системе и `config.xml`.
@@ -67,10 +65,6 @@
 - `PASSWORD` — новый пароль пользователя `admin` (через `ChangePassTool`).
 - `SSH_PUBLIC_KEY` — публичный SSH-ключ для `admin` (base64 → `config.xml`).
 - `PFCTL` — целевое состояние firewall (`on`/`off`).
-- `MGMT_ENABLE` — включает генерацию правил для менеджмент-интерфейса (`on`/`off`).
-- `MGMT_ALLOWED_IPS` — список IPv4-адресов/подсетей, которым разрешено подключаться к управленческому интерфейсу (пробел/запятая).
-- `MGMT_TCP_PORTS` — TCP-порты для доступа (по умолчанию `443 80 22`). Правила применяются мгновенно, а весь прочий IPv4/IPv6
-  трафик на интерфейсе блокируется в направлении `out`.
 - `BLOCK_PRIVATE_NETWORKS` — сохраняет фильтр `blockpriv` на WAN при `on`.
 - `BLOCK_BOGON_NETWORKS` — сохраняет фильтр `blockbogons` на WAN при `on`
 
@@ -105,15 +99,6 @@ ETH1_TYPE="lan"
 ETH1_IP="192.168.10.1"
 ETH1_MASK="255.255.255.0"
 ETH1_DNS="192.168.10.1"
-
-ETH2_MAC="00:50:56:aa:bb:03"
-ETH2_TYPE="mgmt"
-ETH2_IP="91.185.11.71"
-ETH2_MASK="255.255.255.240"
-
-MGMT_ENABLE="on"
-MGMT_ALLOWED_IPS="91.185.11.70"
-MGMT_TCP_PORTS="443 80 22"
 
 SET_HOSTNAME="pfsense-demo"
 PFCTL="off"
