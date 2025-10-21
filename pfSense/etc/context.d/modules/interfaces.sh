@@ -8,6 +8,8 @@ configure_interfaces_by_mac() {
     # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
     iface_type_changed=false
     added_if_count=0
+    MGMT_TARGETS=""
+    mgmt_count=0
     # Проверяем, есть ли новые ETHx_* переменные против текущего config.xml
     ctx_if_count=$(set | grep -oE '^ETH(ERNET)?[0-9]+_MAC' | sort -u | wc -l | awk '{print $1}')
     xml_if_count=$(xml sel -t -v "count(//interfaces/*)" "$fn_xml_file" 2>/dev/null || echo 0)
@@ -79,6 +81,7 @@ configure_interfaces_by_mac() {
 #                    gw=$(get_ctx_var "$idx" "GATEWAY")
                     iface_type=$(get_ctx_var "$idx" "TYPE")
                     # Определяем тип интерфейса
+                    is_mgmt="false"
                     if [ -n "$iface_type" ]; then
                         lower_type=$(echo "$iface_type" | tr '[:upper:]' '[:lower:]')
                         case "$lower_type" in
@@ -131,6 +134,23 @@ configure_interfaces_by_mac() {
                                     next_opt=$((next_opt + 1))
                                     desc="$(echo "$network" | tr '[:lower:]' '[:upper:]')"
                                 fi
+                                ;;
+                            mgmt)
+                                mgmt_count=$((mgmt_count + 1))
+                                candidate="opt$next_opt"
+                                while echo "$used_networks" | tr ' ' '\n' | grep -qx "$candidate"; do
+                                    next_opt=$((next_opt + 1))
+                                    candidate="opt$next_opt"
+                                done
+                                network="$candidate"
+                                used_networks="$used_networks $network"
+                                next_opt=$((next_opt + 1))
+                                if [ "$mgmt_count" -gt 1 ]; then
+                                    desc="MGMT$mgmt_count"
+                                else
+                                    desc="MGMT"
+                                fi
+                                is_mgmt="true"
                                 ;;
                             opt[0-9]*)
                                 # Запрос OPTx
@@ -208,6 +228,9 @@ configure_interfaces_by_mac() {
                             -e "s|<descr>$desc</descr>|<descr><![CDATA[$desc]]></descr>|g" \
                             -e 's|<enable>YES</enable>|<enable></enable>|g' \
                             "$fn_backup_xml_file"
+                        if [ "$is_mgmt" = "true" ]; then
+                            MGMT_TARGETS="$MGMT_TARGETS $network:$ip_addr"
+                        fi
                     fi
                 fi
             done
