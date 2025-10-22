@@ -183,7 +183,26 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
         write_config('[MGMT] Added management firewall rules');
         filter_configure();
     "
+    # Отключаем webConfigurator anti-lockout rule
+    log "Disabling webConfigurator anti-lockout rule"
+    apply_php "
+        require_once('config.inc');
+        require_once('util.inc');
+        require_once('system.inc');
+        require_once('filter.inc');
 
+        \$config = parse_config(true);
+
+        if (!isset(\$config['system'])) \$config['system'] = [];
+        if (!isset(\$config['system']['webgui'])) \$config['system']['webgui'] = [];
+
+        \$config['system']['webgui']['noantilockout'] = 'yes';
+        write_config('[MGMT] Disabled webConfigurator anti-lockout rule');
+
+        // применяем изменения сразу
+        system_configure();
+        filter_configure();
+    "
     log "Management interface $MGMT_IF configured successfully"
 
 else
@@ -239,7 +258,25 @@ apply_php "
             system_routing_configure();
         }
     "
+    # восстанавливаем webConfigurator anti-lockout rule
+    log "Re-enabling webConfigurator anti-lockout rule"
+    apply_php "
+        require_once('config.inc');
+        require_once('util.inc');
+        require_once('system.inc');
+        require_once('filter.inc');
 
+        \$config = parse_config(true);
+
+        if (isset(\$config['system']['webgui']['noantilockout'])) {
+            unset(\$config['system']['webgui']['noantilockout']);
+            write_config('[MGMT] Re-enabled webConfigurator anti-lockout rule');
+
+            // применяем изменения сразу
+            system_configure();
+            filter_configure();
+        }
+    "
     log "Management interface $MGMT_IF disabled"
 fi
 
