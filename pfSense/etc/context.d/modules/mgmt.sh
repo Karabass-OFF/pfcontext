@@ -12,7 +12,7 @@
 : "${MGMT_ENABLE:=NO}"
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,443}"
-LOG_FILE="/var/log/context-mgmt.log"
+LOG_FILE="/var/log/context.log"
 SCRIPT_VERSION="MGMT v3.1 2025-10-22"
 
 export MGMT_ENABLE MGMT_IF MGMT_PORT
