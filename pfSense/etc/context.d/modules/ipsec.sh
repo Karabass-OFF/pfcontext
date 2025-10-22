@@ -1,23 +1,17 @@
 #!/bin/sh
 # -------------------------------------------------------------------
 # pfSense IPsec Context Script (OpenNebula compatible)
-# Author: shaman edition — v3.1 (2025-10-22)
+# Author: shaman edition — v3.3 (2025-10-22)
 # -------------------------------------------------------------------
-# Context vars:
-#   IPSEC_ENABLE=YES|NO
-#   IPSEC_TUNNELS=N (1..N)
-#   IPSEC1_PEER_IP, IPSEC1_PSK, IPSEC1_LOCAL_SUBNET, IPSEC1_REMOTE_SUBNET, IPSEC1_OUT_IF
-#   IPSEC_CRYPTO_IKE=aes256 | sha256 | etc
-#   IPSEC_HASH_IKE=sha256
-#   IPSEC_DH_GROUP=14
-#   IPSEC_CRYPTO_ESP=aes256
-#   IPSEC_HASH_ESP=sha256
-#   IPSEC_LIFETIME_IKE=86400
-#   IPSEC_LIFETIME_ESP=28800
+# Context vars (test defaults for debugging)
 # -------------------------------------------------------------------
-
-: "${IPSEC_ENABLE:=NO}"
-: "${IPSEC_TUNNELS:=0}"
+: "${IPSEC_ENABLE:=YES}"
+: "${IPSEC_TUNNELS:=1}"
+: "${IPSEC1_PEER_IP:=188.130.234.215}"
+: "${IPSEC1_PSK:=184ff2f58ac2766b41d1e39a6298ed65cd58f5b8b8868b623925}"
+: "${IPSEC1_LOCAL_SUBNET:=LAN subnet}"
+: "${IPSEC1_REMOTE_SUBNET:=192.168.201.0/24}"
+: "${IPSEC1_OUT_IF:=wan}"
 : "${IPSEC_CRYPTO_IKE:=aes256}"
 : "${IPSEC_HASH_IKE:=sha256}"
 : "${IPSEC_DH_GROUP:=14}"
@@ -27,7 +21,8 @@
 : "${IPSEC_LIFETIME_ESP:=28800}"
 
 LOG_FILE="/var/log/context.log"
-SCRIPT_VERSION="IPSEC v3.1 2025-10-22"
+SCRIPT_VERSION="IPSEC v3.3 2025-10-22"
+STATE_HASH_FILE="/var/run/context-ipsec.hash"
 
 log() {
   printf '%s [context-IPSEC] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
@@ -39,18 +34,42 @@ apply_php() {
   done
 }
 
+sha256_q() {
+  if command -v sha256 >/dev/null 2>&1; then sha256 -q
+  else openssl dgst -sha256 -r | awk '{print $1}'
+  fi
+}
+
+PHPBIN="/usr/local/bin/php"
+[ -x "$PHPBIN" ] || { log "Error: php CLI not found"; exit 1; }
+
 log "Starting IPSEC Context (version=${SCRIPT_VERSION}, ENABLE=${IPSEC_ENABLE}, TUNNELS=${IPSEC_TUNNELS})"
 
 # -------------------------------------------------------------------
 # Skip if disabled
 # -------------------------------------------------------------------
 if [ "$IPSEC_ENABLE" != "YES" ]; then
-  log "IPSEC disabled via context (IPSEC_ENABLE=${IPSEC_ENABLE})"
+  log "IPSEC disabled via context"
   exit 0
 fi
 
-PHPBIN="/usr/local/bin/php"
-[ -x "$PHPBIN" ] || { log "Error: php CLI not found"; exit 1; }
+# -------------------------------------------------------------------
+# Build signature of configuration (for change detection)
+# -------------------------------------------------------------------
+sig_base="${IPSEC_ENABLE}|${IPSEC_TUNNELS}|${IPSEC_CRYPTO_IKE}|${IPSEC_HASH_IKE}|${IPSEC_DH_GROUP}|${IPSEC_CRYPTO_ESP}|${IPSEC_HASH_ESP}|${IPSEC_LIFETIME_IKE}|${IPSEC_LIFETIME_ESP}"
+for i in $(seq 1 "$IPSEC_TUNNELS"); do
+  sig_base="${sig_base}|$(eval echo "\$IPSEC${i}_PEER_IP")|$(eval echo "\$IPSEC${i}_LOCAL_SUBNET")|$(eval echo "\$IPSEC${i}_REMOTE_SUBNET")|$(eval echo "\$IPSEC${i}_OUT_IF")|$(eval echo "\$IPSEC${i}_PSK")"
+done
+new_hash=$(printf "%s" "$sig_base" | sha256_q)
+
+if [ -f "$STATE_HASH_FILE" ]; then
+  old_hash=$(cat "$STATE_HASH_FILE")
+  if [ "$new_hash" = "$old_hash" ]; then
+    log "No changes in context variables, skipping execution"
+    exit 0
+  fi
+fi
+echo "$new_hash" > "$STATE_HASH_FILE"
 
 # -------------------------------------------------------------------
 # Prepare helper PHP snippets
@@ -72,7 +91,33 @@ filter_configure();
 '
 
 # -------------------------------------------------------------------
-# MAIN LOOP: build tunnels 1..N
+# Remove old ContextIPSEC_* if number reduced or missing
+# -------------------------------------------------------------------
+log "Checking for obsolete ContextIPSEC_* tunnels"
+apply_php "
+  require_once('config.inc');
+  global \$config;
+  ${php_prepare_arrays}
+  \$current = range(1, ${IPSEC_TUNNELS});
+  \$config['ipsec']['phase1'] = array_values(array_filter(\$config['ipsec']['phase1'], function(\$p) use(\$current){
+    if (!isset(\$p['descr'])) return true;
+    if (preg_match('/^ContextIPSEC_(\d+)/', \$p['descr'], \$m)) {
+      return in_array((int)\$m[1], \$current);
+    }
+    return true;
+  }));
+  \$config['ipsec']['phase2'] = array_values(array_filter(\$config['ipsec']['phase2'], function(\$p) use(\$current){
+    if (!isset(\$p['descr'])) return true;
+    if (preg_match('/^ContextIPSEC_(\d+)/', \$p['descr'], \$m)) {
+      return in_array((int)\$m[1], \$current);
+    }
+    return true;
+  }));
+  write_config('[Context-IPSEC] Cleanup obsolete ContextIPSEC_* entries');
+"
+
+# -------------------------------------------------------------------
+# MAIN LOOP: create or update tunnels
 # -------------------------------------------------------------------
 idx=1
 while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
@@ -92,14 +137,7 @@ while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
     global \$config;
     ${php_prepare_arrays}
 
-    \$descr='${DESCR}';
-    \$peer='${PEER_IP}';
-    \$psk='${PSK}';
-    \$lsub='${LSUB}';
-    \$rsub='${RSUB}';
-    \$iface='${IFACE}';
-
-    // Remove existing ContextIPSEC_${idx} entries if any
+    // remove same descr
     \$config['ipsec']['phase1'] = array_values(array_filter(\$config['ipsec']['phase1'], function(\$p){
       return !isset(\$p['descr']) || \$p['descr'] !== '${DESCR}';
     }));
@@ -107,16 +145,13 @@ while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
       return !isset(\$p['descr']) || \$p['descr'] !== '${DESCR}';
     }));
 
-    // Add Phase 1
-    \$p1 = [
+    // phase1
+    \$config['ipsec']['phase1'][] = [
       'ikeid' => '${idx}',
-      'interface' => \$iface,
-      'remote-gateway' => (\$peer ?: 'any'),
-      'p1mode' => 'main',
-      'p1myidenttype' => 'myaddress',
-      'p1peeridenttype' => 'address',
+      'interface' => '${IFACE}',
+      'remote-gateway' => '${PEER_IP}',
       'p1authentication_method' => 'pre_shared_key',
-      'p1pskey' => \$psk,
+      'p1pskey' => '${PSK}',
       'p1exchange' => 'ikev2',
       'p1ealg' => '${IPSEC_CRYPTO_IKE}',
       'p1ealgkeylen' => '256',
@@ -125,14 +160,13 @@ while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
       'lifetime' => '${IPSEC_LIFETIME_IKE}',
       'descr' => '${DESCR}'
     ];
-    \$config['ipsec']['phase1'][] = \$p1;
 
-    // Add Phase 2
-    \$p2 = [
+    // phase2
+    \$config['ipsec']['phase2'][] = [
       'ikeid' => '${idx}',
       'mode' => 'tunnel',
-      'local-subnet' => \$lsub,
-      'remote-subnet' => \$rsub,
+      'local-subnet' => '${LSUB}',
+      'remote-subnet' => '${RSUB}',
       'protocol' => 'esp',
       'encryption-algorithm-option' => [
         'name' => '${IPSEC_CRYPTO_ESP}',
@@ -143,14 +177,11 @@ while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
       'lifetime' => '${IPSEC_LIFETIME_ESP}',
       'descr' => '${DESCR}'
     ];
-    \$config['ipsec']['phase2'][] = \$p2;
 
-    write_config('[Context-IPSEC] Added/updated tunnel ${DESCR}');
+    write_config('[Context-IPSEC] Added/updated ${DESCR}');
   "
 
-  # -------------------------------------------------------------------
-  # Firewall rules (WAN / IPsec)
-  # -------------------------------------------------------------------
+  # --- firewall ---
   log "Ensuring firewall rules for $IFACE (UDP 500/4500, ESP)"
   apply_php "
     require_once('config.inc');
@@ -158,28 +189,15 @@ while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
     global \$config;
     \$if='${IFACE}';
     \$rules=\$config['filter']['rule'] ?? [];
-
-    // Drop previous rules with same descr
     \$rules=array_values(array_filter(\$rules, function(\$r){
       return !isset(\$r['descr']) || strpos(\$r['descr'],'[Context-IPSEC-${idx}]')===false;
     }));
-
-    \$rules[]=[
-      'type'=>'pass','interface'=>\$if,'ipprotocol'=>'inet',
-      'protocol'=>'udp','source'=>['any'=>''],'destination'=>['any'=>'','port'=>'500'],
-      'descr'=>'[Context-IPSEC-${idx}] Allow IKE (UDP 500)'
-    ];
-    \$rules[]=[
-      'type'=>'pass','interface'=>\$if,'ipprotocol'=>'inet',
-      'protocol'=>'udp','source'=>['any'=>''],'destination'=>['any'=>'','port'=>'4500'],
-      'descr'=>'[Context-IPSEC-${idx}] Allow NAT-T (UDP 4500)'
-    ];
-    \$rules[]=[
-      'type'=>'pass','interface'=>\$if,'ipprotocol'=>'inet',
-      'protocol'=>'esp','source'=>['any'=>''],'destination'=>['any'=>''],
-      'descr'=>'[Context-IPSEC-${idx}] Allow ESP'
-    ];
-
+    \$rules[]=['type'=>'pass','interface'=>\$if,'ipprotocol'=>'inet','protocol'=>'udp',
+      'destination'=>['any'=>'','port'=>'500'],'descr'=>'[Context-IPSEC-${idx}] Allow IKE (UDP 500)'];
+    \$rules[]=['type'=>'pass','interface'=>\$if,'ipprotocol'=>'inet','protocol'=>'udp',
+      'destination'=>['any'=>'','port'=>'4500'],'descr'=>'[Context-IPSEC-${idx}] Allow NAT-T (UDP 4500)'];
+    \$rules[]=['type'=>'pass','interface'=>\$if,'ipprotocol'=>'inet','protocol'=>'esp',
+      'destination'=>['any'=>''],'descr'=>'[Context-IPSEC-${idx}] Allow ESP'];
     \$config['filter']['rule'] = \$rules;
     write_config('[Context-IPSEC] Firewall rules for ${IFACE}');
     mark_subsystem_dirty('filter');
@@ -189,9 +207,9 @@ while [ "$idx" -le "$IPSEC_TUNNELS" ]; do
 done
 
 # -------------------------------------------------------------------
-# Apply configuration (reload IPsec)
+# Apply configuration
 # -------------------------------------------------------------------
-log "Applying IPsec and firewall configuration"
+log "Reloading IPsec and firewall"
 apply_php "${php_apply_reload}"
 
 log "IPSEC Context applied successfully (Tunnels=${IPSEC_TUNNELS})"
