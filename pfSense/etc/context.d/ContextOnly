@@ -126,6 +126,7 @@ if [ -x "$MGMT_MODULE" ] && [ -n "${MGMT_ENABLE:-}" ]; then
         echo "$(date) [context] MGMT module failed (exit $status)" >> "$LOG"
     fi
 fi
+
 # BGP-модуль 
 if [ -x /etc/context.d/bgp ]; then
     echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
