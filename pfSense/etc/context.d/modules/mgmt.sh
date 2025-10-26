@@ -31,7 +31,7 @@ apply_php() {
 log "Starting Management Interface Context (version=${SCRIPT_VERSION}, IF=${MGMT_IF}, ENABLE=${MGMT_ENABLE}, PORT=${MGMT_PORT}, path=$(realpath "$0"))"
 
 # Для инфы — активный путь к config.xml
-CONF_PATH="$(/usr/local/bin/php -r 'require_once("config.inc"); global $g; echo ($g["conf_path"] ?? "/conf");' 2>/dev/null)"
+CONF_PATH="$(/usr/local/bin/php -r "require_once(\"config.inc\"); global \$g; echo (\$g[\"conf_path\"] ?? \"/conf\");" 2>/dev/null)"
 [ -z "$CONF_PATH" ] && CONF_PATH="/conf"
 log "Detected conf path: ${CONF_PATH}/config.xml"
 
@@ -67,12 +67,12 @@ log "Resolved pfSense interface ${MGMT_IF} -> ${REAL_IF}"
 # -------------------------------------------------------------------
 
 # — Убедиться, что $config['aliases']['alias'] это массив, а не строка/пустота
-php_ensure_aliases_array='
-require_once("config.inc");
-global $config;
-if (!isset($config["aliases"]) || !is_array($config["aliases"])) { $config["aliases"] = []; }
-if (!isset($config["aliases"]["alias"]) || !is_array($config["aliases"]["alias"])) { $config["aliases"]["alias"] = []; }
-'
+php_ensure_aliases_array="
+require_once(\"config.inc\");
+global \$config;
+if (!isset(\$config[\"aliases\"]) || !is_array(\$config[\"aliases\"])) { \$config[\"aliases\"] = []; }
+if (!isset(\$config[\"aliases\"][\"alias\"]) || !is_array(\$config[\"aliases\"][\"alias\"])) { \$config[\"aliases\"][\"alias\"] = []; }
+"
 
 # — Финальная сборка: сперва алиасы, потом правила
 php_apply_aliases_and_filter='
