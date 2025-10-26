@@ -113,19 +113,7 @@ else
     echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
 fi
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
-# Модуль управления management-интерфейсом
-MGMT_MODULE="/etc/context.d/modules/mgmt.sh"
-if [ -x "$MGMT_MODULE" ] && [ -n "${MGMT_ENABLE:-}" ]; then
-    echo "$(date) [context] Running MGMT module $MGMT_MODULE (MGMT_ENABLE=${MGMT_ENABLE})" >> "$LOG"
-    export MGMT_ENABLE MGMT_IF MGMT_PORT
-    "$MGMT_MODULE" >>"$LOG" 2>&1
-    status=$?
-    if [ $status -eq 0 ]; then
-        echo "$(date) [context] MGMT module finished successfully" >> "$LOG"
-    else
-        echo "$(date) [context] MGMT module failed (exit $status)" >> "$LOG"
-    fi
-fi
+
 
 # BGP-модуль 
 if [ -x /etc/context.d/bgp ]; then
@@ -155,6 +143,19 @@ if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
         chmod 700 /root/.ssh
         echo "$(date) [context] SSH public key updated" >> "$LOG"
         #RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
+    fi
+fi
+# Модуль управления management-интерфейсом
+MGMT_MODULE="/etc/context.d/modules/mgmt.sh"
+if [ -x "$MGMT_MODULE" ] && [ -n "${MGMT_ENABLE:-}" ]; then
+    echo "$(date) [context] Running MGMT module $MGMT_MODULE (MGMT_ENABLE=${MGMT_ENABLE})" >> "$LOG"
+    export MGMT_ENABLE MGMT_IF MGMT_PORT
+    "$MGMT_MODULE" >>"$LOG" 2>&1
+    status=$?
+    if [ $status -eq 0 ]; then
+        echo "$(date) [context] MGMT module finished successfully" >> "$LOG"
+    else
+        echo "$(date) [context] MGMT module failed (exit $status)" >> "$LOG"
     fi
 fi
 rm -f "$PID" # Удаляем PID файл, если он есть
