@@ -2,6 +2,8 @@
 #
 # ContextOnly script for pfSense
 #
+set -eu
+trap 'echo "$(date) [context] ERROR at line $LINENO" >> "$LOG"' ERR
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 LOG="/var/log/context.log"
 #LOG="/dev/null" # Uncomment for disable logging
@@ -378,25 +380,25 @@ if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то уда
 fi
 # Отключаем/Включаем private networks для WAN
 if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
-    xml ed -L \
-        -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
+     xml ed -L \
+        -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
         "$backup_xml_file"
     echo "$(date) [context] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
 else
     xml ed -L \
-        -d "//interfaces/$network/blockbogons" \
+        -d "//interfaces/$network/blockpriv" \
         "$backup_xml_file"
     echo "$(date) [context] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
 fi
 # Отключаем/Включаем bogon networks для WAN
 if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
     xml ed -L \
-        -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
+        -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
         "$backup_xml_file"
     echo "$(date) [context-network] BLOCK_BOGON_NETWORKS" >> "$LOG"
 else
     xml ed -L \
-        -d "//interfaces/$network/blockpriv" \
+        -d "//interfaces/$network/blockbogons" \
         "$backup_xml_file"
     echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
 fi
@@ -472,6 +474,8 @@ if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
     mkdir -p /root/.ssh
     if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
         # кодируем ключ в base64 (без переносов строк)
+        # pfSense stores SSH authorized keys in base64 format inside <authorizedkeys>
+        # This ensures compatibility with pfSense GUI and PHP auth subsystem.
         ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
         if xml sel -t -v "//user[name='admin']/authorizedkeys" "$xml_file" >/dev/null 2>&1; then
             xml ed -L -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" "$xml_file"
