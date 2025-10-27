@@ -3,7 +3,7 @@
 # ContextOnly script for pfSense
 #
 set -eu
-trap 'echo "$(date) [context] ERROR at line $LINENO" >> "$LOG"' ERR
+
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 LOG="/var/log/context.log"
 #LOG="/dev/null" # Uncomment for disable logging
@@ -462,10 +462,10 @@ else
 fi
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
 # BGP-модуль 
-if [ -x /etc/context.d/bgp ]; then
-    echo "$(date) [context] Running BGP module /etc/context.d/bgp" >> "$LOG"
+if [ -x /etc/context.d/modules/bgp ]; then
+    echo "$(date) [context] Running BGP module /etc/context.d/modules/bgp" >> "$LOG"
      # shellcheck disable=SC1091
-    . /etc/context.d/bgp
+    . /etc/context.d/modules/bgp
     echo "$(date) [context] BGP module (return $?)" >> "$LOG"
 fi
 
