@@ -18,13 +18,13 @@ SCRIPT_VERSION="MGMT v3.1 2025-10-22"
 export MGMT_ENABLE MGMT_IF MGMT_PORT
 
 log() {
-  printf '%s [context-MGMT] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
+  printf '%s [context-MGMT] %s\n' "$(date)" "$*" >> "$LOG_FILE"
 }
 
 # Проглатываем stdout/stderr PHP в лог — удобно дебажить
 apply_php() {
   /usr/local/bin/php -r "$1" 2>&1 | while IFS= read -r line; do
-    printf '%s [context-MGMT][php] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
+    printf '%s [context-MGMT][php] %s\n' "$(date)" "$line" >> "$LOG_FILE"
   done
 }
 

@@ -2,7 +2,7 @@
 #
 # ContextOnly script for pfSense
 #
-set -eu
+#set -eu
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 LOG="/var/log/context.log"
@@ -13,6 +13,17 @@ CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
 backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
+
+: "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
+: "${PASSWORD_ROOT:=}" # root password override variable
+: "${BGP_ENABLE:=NO}" # по умолчанию BGP выключен
+: "${BLOCK_PRIVATE_NETWORKS:=off}" # по умолчанию off, не блокировать private-сети
+: "${BLOCK_BOGON_NETWORKS:=off}" # по умолчанию off, не блокировать bogon-сети
+: "${RC_RELOAD_ALL:=off}" # по умолчанию off, полный рестарт служб
+: "${RC_RELOAD_IFACE:=off}" # по умолчанию off, рестарт интерфейсов
+: "${SSH_PUBLIC_KEY:=}" # public key for root access
+: "${MGMT_ENABLE:=}" # defined in mgmt.sh
+: "${PFCTL:=}" # defined in pfctl_off
 
 echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
@@ -334,10 +345,12 @@ done
 # Настраиваем шлюз по умолчанию для WAN ecли он указан и отличается от текущего       
 if [ -n "$WAN_GATEWAY" ]; then
     network="wan"
-    if [ "$current_gw" != "$WAN_GATEWAY" ] || [ "${BGP_ENABLE}" != "YES" ]; then # Меняем шлюз, только если он отличается от текущего и BGP выключен
-        echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $WAN_GATEWAY — updating route (BGP off)" >> "$LOG"
-        route delete default >/dev/null 2>&1
-        route add default "$WAN_GATEWAY"
+    sleep 0.1
+    if [ "$current_gw" != "$WAN_GATEWAY" ]; then # Меняем шлюз, только если он отличается от текущего 
+        { echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $WAN_GATEWAY — updating route (BGP off)" 
+          route delete default 
+          route add default "$WAN_GATEWAY" 
+        } >> "$LOG" 2>&1
         # --- Проверяем, есть ли секция <gateways> ---
         if ! xml sel -t -v "//gateways" "$backup_xml_file" >/dev/null 2>&1; then
             echo "$(date) [context] Gateways section missing — creating one" >> "$LOG"
@@ -403,7 +416,7 @@ else
     echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
 fi
 # Синхронизация config.xml (если есть изменения)
-if diff -I '<bcrypt-hash>.*</bcrypt-hash>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
+if diff -I '<bcrypt-hash>.*</bcrypt-hash>'  -I '<authorizedkeys>.*</authorizedkeys>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
     rm -f "$backup_xml_file"
     echo "$(date) [context] No changes in config.xml, backup_xml_file removed" >> "$LOG"
 elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, копируем его в config.xml
@@ -436,8 +449,14 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
     case "$_lc_pfctl" in
         no|off|0|false|disabled)
             {
-                pfctl -d
-                echo "$(date) [context] pfSense firewall disabled"
+                if pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; then
+                    pfctl -d
+                    echo "$(date) [context] pfSense firewall disabled"
+                else
+                    echo "$(date) [context] pfSense firewall already disabled (pf not enabled)"
+                fi
+                echo "$$" > /var/run/pfctlcontext.pid
+                echo "$(date) [context] Created pid file: /var/run/pfctlcontext.pid"
             } >> "$LOG" 2>&1
             ;;
         yes|on|1|true|enabled)
@@ -462,7 +481,7 @@ else
 fi
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
 # BGP-модуль 
-if [ -x /etc/context.d/modules/bgp ]; then
+if [ -x /etc/context.d/modules/bgp ] && [ "$BGP_ENABLE" = "YES" ]; then
     echo "$(date) [context] Running BGP module /etc/context.d/modules/bgp" >> "$LOG"
      # shellcheck disable=SC1091
     . /etc/context.d/modules/bgp
