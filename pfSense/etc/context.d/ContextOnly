@@ -13,6 +13,7 @@ CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
 backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
+SCRIPT_VERSION="v0.3.1 2025-10-22"
 
 : "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
 : "${PASSWORD_ROOT:=}" # root password override variable
@@ -25,7 +26,7 @@ backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
 : "${MGMT_ENABLE:=}" # defined in mgmt.sh
 : "${PFCTL:=}" # defined in pfctl_off
 
-echo "$(date) [context] === START ContextOnly $(date) ===" >> "$LOG"
+echo "$(date) [context] === START ContextOnly $SCRIPT_VERSION ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
 mkdir -p "$CONTEXT_MOUNT"
 if ! mount | grep -q "on $CONTEXT_MOUNT "; then
@@ -315,13 +316,8 @@ else
         echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
     fi
 fi
-###################################################################################
-# --- BGP ENABLE / DISABLE LOGIC ( REMOVE DEFAULT GATEWAY IF BGP IS ENABLED ) --- #
-#                   --- BOGON / PRIVATE NETWORKS LOGIC ---                        #
-###################################################################################
-# если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
+# Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
 # RC_RELOAD_IFACE=on|off (по умолчанию off)
-: "${RC_RELOAD_IFACE:=off}"
 hash1="$(xml sel -t -c "//interfaces" "$xml_file" | md5)"
 hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | md5)"
 if [ "$hash1" != "$hash2" ]; then
@@ -381,7 +377,7 @@ if [ -n "$WAN_GATEWAY" ]; then
         echo "$(date) [context] Current default gateway: $current_gw matches desired: $WAN_GATEWAY — no change needed" >> "$LOG"
     fi
 fi
-# если BGP включен, удаляем маршрут по умолчанию, чтобы BGP управлял маршрутом
+# Если BGP включен, удаляем маршрут по умолчанию, чтобы BGP управлял маршрутом
 # BGP_ENABLE=YES|NO (по умолчанию NO)
 if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
     echo "$(date) [context] BGP is enabled, removing default route: $WAN_GATEWAY because BGP will manage it" >> "$LOG"
@@ -463,6 +459,8 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
             if pfctl -s info | grep -q 'Status: Disabled'; then
                 {
                     echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
+                    rm -rf /var/run/pfctlcontext.pid
+                    echo "$(date) [context] Removed pid file: /var/run/pfctlcontext.pid"
                     pfctl -e
                     echo "$(date) [context] pfSense firewall enabled"
                 } >> "$LOG" 2>&1
@@ -481,7 +479,7 @@ else
 fi
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
 # BGP-модуль 
-if [ -x /etc/context.d/modules/bgp ] && [ "$BGP_ENABLE" = "YES" ]; then
+if [ -x /etc/context.d/modules/bgp ]; then
     echo "$(date) [context] Running BGP module /etc/context.d/modules/bgp" >> "$LOG"
      # shellcheck disable=SC1091
     . /etc/context.d/modules/bgp
@@ -511,10 +509,11 @@ if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
 fi
 # Модуль управления management-интерфейсом
 MGMT_MODULE="/etc/context.d/modules/mgmt.sh"
-if [ -x "$MGMT_MODULE" ] && [ -n "${MGMT_ENABLE:-}" ]; then
+if [ -x "$MGMT_MODULE" ]; then
     echo "$(date) [context] Running MGMT module $MGMT_MODULE (MGMT_ENABLE=${MGMT_ENABLE})" >> "$LOG"
     export MGMT_ENABLE MGMT_IF MGMT_PORT
-    "$MGMT_MODULE" >>"$LOG" 2>&1
+    # shellcheck disable=SC1090
+    . "$MGMT_MODULE" >>"$LOG" 2>&1
     status=$?
     if [ $status -eq 0 ]; then
         echo "$(date) [context] MGMT module finished successfully" >> "$LOG"

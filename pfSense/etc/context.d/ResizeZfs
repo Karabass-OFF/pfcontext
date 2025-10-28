@@ -3,9 +3,10 @@
 # Теперь корректно определяет последний freebsd-* раздел (корень)
 
 LOG="/var/log/context-resizefs.log"
+SCRIPT_VERSION="RESIZE v0.3.1 2025-10-22"
 
 {
-  echo "$(date) [context] === START ResizeFs $(date) ==="
+  echo "$(date) [context] === START ResizeFs $SCRIPT_VERSION ==="
 
   DISK=$(gpart show | awk '/GPT/ {print $4; exit}')
   [ -z "$DISK" ] && { echo "$(date) [context] Не удалось определить диск — выходим"; exit 1; }

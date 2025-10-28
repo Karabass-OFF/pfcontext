@@ -7,9 +7,9 @@
 | Путь | Назначение |
 | --- | --- |
 | `pfSense/INSTALL` | Краткий чек-лист развертывания пакета контекстных скриптов на pfSense. |
-| `pfSense/tmp/rc.initial.patch` | Патч для добавления запуска `ResizeZfs` и `ContextOnly` в `/etc/rc.initial`. |
+| `pfSense/etc/rc.initial` | Модифицированный `rc.initial`, который запускает `ResizeZfs` и `ContextOnly` в начале загрузки. |
 | `pfSense/etc/context.d/ContextOnly` | Основной модуль: читает `context.sh`, применяет сеть, системные параметры и вызывает BGP. |
-| `pfSense/etc/context.d/bgp` | Интеграция с FRR/BGP и инкрементальное обновление маршрутизации. |
+| `pfSense/etc/context.d/modules/bgp` | Интеграция с FRR/BGP и инкрементальное обновление маршрутизации. |
 | `pfSense/etc/context.d/ResizeZfs` | Расширение ZFS-раздела и пула при увеличении виртуального диска. |
 | `pfSense/etc/context.d/pfctl_off` | Поддержка выключения pfctl по PID-файлу через cron. |
 | `pfSense/etc/context.d/modules/mgmt.sh` | Управление выделенным MGMT-интерфейсом: алиасы, правила firewall и anti-lockout. |
@@ -42,8 +42,7 @@
 5. Перезагрузите устройство pfSense, чтобы запустился новый поток инициализации.
 
 ## Переменные контекста
-Все параметры задаются в `context.sh`, который подключается на раннем этапе загрузки. Ниже — пользовательские переменные, сгруппированные по функциям. Префиксы `ETHx_` и `ETHERNETx_` взаимозаменяемы.
-
+Все параметры задаются в `context.sh`, который подключается на раннем этапе загрузки. Ниже — пользовательские переменные, сгруппированные по функциям. 
 
 ### Системные/служебные 
 | Переменная | Назначение |
@@ -53,27 +52,22 @@
 | `CONTEXT`-переменные среды | Внутренние переменные (`CONTEXT_MOUNT`, `CONTEXT_DEV`, `PID`) управляют процессом монтирования ISO и отслеживанием изменений интерфейсов. Пользователю их задавать не нужно, но важно знать о лог-файле `/var/log/context.log`. |
 
 ### Сеть
-- `ETHx_MAC` — привязка интерфейса к MAC-адресу на хосте.
-- `ETHx_TYPE` — требуемая роль (`lan`, `wan`, `optN`), определяет раздел `<interfaces>`.
-- `ETHx_IP` / `ETHx_MASK` — IPv4-адрес и маска, записываемые в `config.xml`.
-- `ETHx_GATEWAY` — шлюз по умолчанию для WAN-интерфейса.
-- `ETHx_DNS` — список DNS-серверов, применяемых к системе и `config.xml`.
-- `SET_HOSTNAME` — имя хоста pfSense.
+- `ETHERNETx_TYPE` — требуемая роль (`lan`, `wan`, `optN`), определяет раздел `<interfaces>`.
 
 ### Диск
 - Дополнительных переменных не требуется — `ResizeZfs` расширяет пул автоматически при наличии свободного места.
 
 ### Фаервол и доступ
-- `PASSWORD` — новый пароль пользователя `admin` (через `ChangePassTool`).
+- `PASSWORD_ROOT` или `PASSWORD` — новый пароль пользователя `admin` (через `ChangePassTool`).
 - `SSH_PUBLIC_KEY` — публичный SSH-ключ для `admin` (base64 → `config.xml`).
-- `PFCTL` — целевое состояние firewall (`on`/`off`).
+- `PFCTL` — целевое состояние firewall (`YES`/`NO`).
 - `BLOCK_PRIVATE_NETWORKS` — сохраняет фильтр `blockpriv` на WAN при `on`.
 - `BLOCK_BOGON_NETWORKS` — сохраняет фильтр `blockbogons` на WAN при `on`
 
 ### Управление management-интерфейсом
 - `MGMT_ENABLE` — включает (YES) или отключает (NO) применение модуля `mgmt.sh` для выбранного интерфейса.
 - `MGMT_IF` — логическое имя интерфейса pfSense (`lan`, `wan`, `optN`), для которого настраиваются правила доступа и убирается шлюз.
-- `MGMT_PORT` — перечень TCP-портов (через запятую), из которых формируется алиас `MGMT_PORTS` и разрешается доступ к webGUI/SSH; ICMP добавляется автоматически.
+- `MGMT_PORT` — перечень TCP-портов (через пробел), из которых формируется алиас `MGMT_PORTS` и разрешается доступ к webGUI/SSH; ICMP добавляется автоматически.
 
 ### Автоматизация перезапусков
 - `RC_RELOAD_ALL` — полный перезапуск служб после применения `config.xml`.
@@ -126,6 +120,10 @@ BGP_NETWORKS_TO_DISTRIBUTE="192.168.10.0/24,ALL"
 BGP_NEIGHBORS="198.51.100.2,65002,s3cr3t"
 BGP_REDIST_CONNECTED="yes"
 BGP_REDIST_STATIC="no"
+# MGMT
+MGMT_ENABLE="YES"
+MGMT_IF="lan"
+MGMT_PORT="22 443 4443"
 ```
 
 ### Журналы модулей
