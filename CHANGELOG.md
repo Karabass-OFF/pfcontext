@@ -1,3 +1,6 @@
+## v0.3.15 — 2025-10-29 16:34
+SCRIPT_VERSION
+
 ## v0.3.14 — 2025-10-29 16:33
 test version bump
 
