@@ -3,13 +3,15 @@
 # POSIX sh; persists config via /usr/local/bin/php (не через pfSsh.php playback)
 
 set -eu
+SCRIPT_VERSION="BGP v0.3.1 2025-10-22"
 #LOG="/dev/null"  # set to /var/log/context-bgp.log for debug
 LOGBGP="/var/log/context.log"
 log() {
-  ts=$(date +"%Y-%m-%d %H:%M:%S")
+  ts=$(date)
   printf "%s [context-bgp] BGP: %s\n" "$ts" "$*" >> "$LOGBGP" 2>/dev/null
 }
 
+log "Starting BGP Context Module (version=${SCRIPT_VERSION}, path=$(realpath "$0"))"
 # --- 0) Preconditions --------------------------------------------------------
 if ! pkg info -q -e frr9 && ! pkg info -q -e pfSense-pkg-frr; then
   log "FRR package not installed, skipping"
@@ -94,7 +96,7 @@ fi
 BGP_NETWORKS_TO_DISTRIBUTE=$(echo "$BGP_NETWORKS_TO_DISTRIBUTE" | sed -E 's/[^[:space:]]+/&\,ALL/g')
 : "${FRR_ENABLE:=on}"                               # on| (пусто)
 : "${FRR_DEFAULT_ROUTER_ID:=${BGP_ROUTER_ID:-}}"    # глобальный RID (UI: Default Router ID)
-#: "${FRR_MASTER_PASSWORD:=lhgklgkuyfgkiyu}"                        # UI: Master Password
+: "${FRR_MASTER_PASSWORD:=lh2gk2lg2ku3yf23gkiyu}"                        # UI: Master Password
 : "${FRR_PASSWORD_ENCRYPT:=}"                       # '' или 'on' (если хочешь хранить зашифровано в config.xml)
 # Логирование переменных (без паролей) для отладки 
 mask() {
@@ -181,7 +183,7 @@ if [ -f "$STATE_HASH_FILE" ]; then
     return 0
   fi
 fi
-log "IM here"
+
 # Обновляем сохранённый хэш
 echo "$new_hash" > "$STATE_HASH_FILE"
 # --- 2) Build PHP neighbors array literal -------------------------------------

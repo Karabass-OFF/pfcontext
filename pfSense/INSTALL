@@ -8,20 +8,16 @@
    ```sh
     ssh user@host 
     pkg install -y xmlstarlet
-    et PKG = `pkg search -x frr |  awk '/pfSense/{print $1}'`
+    pkg install -y vim
+    set PKG = `pkg search -x frr |  awk '/pfSense/{print $1}'`
     echo y | pkg install "$PKG"
     ```
-5. Добавьте ранний запуск скриптов в `config.xml` (команда создаст узел, если его ещё нет):
-   ```sh
-   ssh user@host "xml ed -L -u '//system/earlyshellcmd' -v '/etc/context.d/ResizeZfs onestart && /etc/context.d/ContextOnly onestart' /cf/conf/config.xml || \
-                  xml ed -L -a '//system' -t elem -n earlyshellcmd -v '/etc/context.d/ResizeZfs onestart && /etc/context.d/ContextOnly onestart' /cf/conf/config.xml"
-   ```
-6. Очистите логи и резервные копии:
+5. Очистите логи и резервные копии:
     ```sh
     ssh user@host "find /var/log -type f -exec rm -f {} +"
    ssh user@host "rm -f /cf/conf/backup/*"
     ```
-7. Перезагрузите pfSense, чтобы запустился новый цикл инициализации:
+6. Перезагрузите pfSense, чтобы запустился новый цикл инициализации:
    ```sh
    ssh user@host 'reboot'
    ```
