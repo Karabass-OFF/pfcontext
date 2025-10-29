@@ -1,3 +1,21 @@
+## v0.3.11 — 2025-10-29 16:06
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch tested
+# Your branch is ahead of 'origin/tested' by 5 commits.
+#   (use "git push" to publish your local commits)
+#
+# Changes to be committed:
+#	modified:   CHANGELOG.md
+#	modified:   VERSION
+#	modified:   pfSense/etc/context.d/pfctl_off
+#
+
+## v0.3.10 — 2025-10-29 16:05
+SCRIPT_VERSION change auto
+
 ## v0.3.9 — 2025-10-29 16:04
 
 # Please enter the commit message for your changes. Lines starting
