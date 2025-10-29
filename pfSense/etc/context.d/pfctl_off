@@ -3,7 +3,7 @@
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 PFPID_FILE=/var/run/pfctlcontext.pid
 LOG=/var/log/context.log
-SCRIPT_VERSION="PFCTL v0.3.11"
+SCRIPT_VERSION="PFCTL v0.3.12"
 #LOG=/dev/null
 
 # Проверяем наличие PID-файла

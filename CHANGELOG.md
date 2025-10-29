@@ -1,3 +1,6 @@
+## v0.3.12 — 2025-10-29 16:06
+SCRIPT_VERSION change auto
+
 ## v0.3.11 — 2025-10-29 16:06
 
 # Please enter the commit message for your changes. Lines starting
