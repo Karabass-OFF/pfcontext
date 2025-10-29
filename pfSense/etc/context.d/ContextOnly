@@ -1,7 +1,5 @@
 #!/bin/sh
-#
 # ContextOnly script for pfSense
-#
 #set -eu
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
