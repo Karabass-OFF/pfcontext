@@ -13,7 +13,7 @@
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,443}"
 LOG_FILE="/var/log/context.log"
-SCRIPT_VERSION="MGMT v0.3.1 2025-10-22"
+SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
 
 export MGMT_ENABLE MGMT_IF MGMT_PORT
 

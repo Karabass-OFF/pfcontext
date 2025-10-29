@@ -3,7 +3,7 @@
 # Теперь корректно определяет последний freebsd-* раздел (корень)
 
 LOG="/var/log/context-resizefs.log"
-SCRIPT_VERSION="RESIZE v0.3.1 2025-10-22"
+SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
 
 {
   echo "$(date) [context] === START ResizeFs $SCRIPT_VERSION ==="
