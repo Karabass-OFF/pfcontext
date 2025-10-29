@@ -1,3 +1,6 @@
+## v0.3.6 — 2025-10-29 14:27
+init version tracking
+
 ## v0.3.5 — 2025-10-29 14:22
 init version tracking
 
