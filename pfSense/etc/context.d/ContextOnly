@@ -13,7 +13,7 @@ CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
 backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
-SCRIPT_VERSION="v0.3.1 2025-10-22"
+SCRIPT_VERSION="v0.3.5"
 
 : "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
 : "${PASSWORD_ROOT:=}" # root password override variable
@@ -445,7 +445,7 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
     case "$_lc_pfctl" in
         no|off|0|false|disabled)
             {
-                if pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; then
+                if pfctl -s info 2>/dev/null | grep -qi 'Status: Enabled'; then
                     pfctl -d
                     echo "$(date) [context] pfSense firewall disabled"
                 else
@@ -456,7 +456,7 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
             } >> "$LOG" 2>&1
             ;;
         yes|on|1|true|enabled)
-            if pfctl -s info | grep -q 'Status: Disabled'; then
+            if pfctl -s info | grep -qi 'Status: Disabled'; then
                 {
                     echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
                     rm -rf /var/run/pfctlcontext.pid
