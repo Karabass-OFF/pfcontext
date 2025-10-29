@@ -1,3 +1,36 @@
+## v0.3.9 — 2025-10-29 16:04
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch tested
+# Your branch is ahead of 'origin/tested' by 4 commits.
+#   (use "git push" to publish your local commits)
+#
+# Changes to be committed:
+#	modified:   CHANGELOG.md
+#	modified:   VERSION
+#	modified:   pfSense/etc/context.d/pfctl_off
+#
+
+## v0.3.8 — 2025-10-29 16:02
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch tested
+# Your branch is ahead of 'origin/tested' by 4 commits.
+#   (use "git push" to publish your local commits)
+#
+# Changes to be committed:
+#	modified:   CHANGELOG.md
+#	modified:   VERSION
+#	modified:   pfSense/etc/context.d/pfctl_off
+#
+
+## v0.3.7 — 2025-10-29 16:02
+add auto SCRIPT_VERSION
+
 ## v0.3.6 — 2025-10-29 14:27
 init version tracking
 
