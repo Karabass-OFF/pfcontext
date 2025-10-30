@@ -37,7 +37,7 @@ SCRIPT_PATH="$(realpath "$0" 2>/dev/null || echo "$0")"
 
 log() {
   printf '%s [context-IPSEC] %s
-' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG_FILE"
+' "$(date)" "$*" >> "$LOG_FILE"
 }
 
 if [ "${CONTEXT_IPSEC_ENABLE}" != "YES" ]; then
@@ -118,10 +118,21 @@ function ctx_log(string $message): void {
 }
 
 set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline): bool {
+    // Если ошибка подавлена через @, не трогаем
+    if (error_reporting() === 0) {
+        return false;
+    }
     ctx_log(sprintf('PHP error %d at %s:%d — %s', $errno, $errfile, $errline, $errstr));
-    throw new ErrorException($errstr, 0, $errno, $errfile, $errline);
+    return true; // Не пробрасываем ошибку дальше, просто логируем
 });
 
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        ctx_log(sprintf('FATAL %d at %s:%d — %s', $e['type'], $e['file'], $e['line'], $e['message']));
+        echo 'error|0|0';
+    }
+});
 $idx = (int) (getenv('CTX_TUNNEL_INDEX') ?: 0);
 $remote = trim((string) (getenv('CTX_REMOTE') ?: ''));
 $psk = (string) (getenv('CTX_PSK') ?: '');
@@ -372,7 +383,7 @@ if [ "$changed_tunnels" -gt 0 ]; then
   /usr/local/bin/php <<'PHP'
 <?php
 declare(strict_types=1);
-error_reporting(E_ERROR | E_PARSE);
+error_reporting(E_ALL & ~E_NOTICE);
 $logFile = '/var/log/context.log';
 
 global $g;
