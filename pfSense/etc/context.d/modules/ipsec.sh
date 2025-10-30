@@ -47,21 +47,6 @@ fi
 
 log "=== Starting IPSEC Context (version=${SCRIPT_VERSION}, path=${SCRIPT_PATH}) ==="
 
-ensure_config_cache() {
-  if [ ! -f /tmp/config.cache ]; then
-    if ! : > /tmp/config.cache 2>/dev/null; then
-      log "Unable to create /tmp/config.cache (check permissions)"
-      return 1
-    fi
-  fi
-  return 0
-}
-
-if ! ensure_config_cache; then
-  log "Aborting: cannot prepare /tmp/config.cache"
-  exit 1
-fi
-
 get_var() {
   local idx="$1" key="$2" var
   var="CONTEXT_IPSEC_${idx}_${key}"
@@ -109,18 +94,28 @@ for idx in $(seq 1 "$CONTEXT_IPSEC_TUNNELS"); do
   processed_tunnels=$((processed_tunnels + 1))
   log "→ Processing tunnel #${idx} (${local_if} → ${remote})"
 
-  result=$(CTX_TUNNEL_INDEX="$idx"     CTX_REMOTE="$remote"     CTX_PSK="$psk"     CTX_LOCALIF="$local_if"     CTX_LOCAL_NET="$local_net"     CTX_REMOTE_NET="$remote_net"     CTX_P1_IKE="$p1_ike"     CTX_P1_ENC_NAME="$p1_enc_name"     CTX_P1_ENC_KEYLEN="$p1_enc_keylen"     CTX_P1_HASH="$p1_hash"     CTX_P1_DH="$p1_dh"     CTX_P1_LIFETIME="$p1_lifetime"     CTX_P2_PROTO="$p2_proto"     CTX_P2_ENC_NAME="$p2_enc_name"     CTX_P2_ENC_KEYLEN="$p2_enc_keylen"     CTX_P2_AUTH="$p2_auth"     CTX_P2_AUTH_RAW="$p2_auth_raw"     CTX_P2_PFS="$p2_pfs"     CTX_P2_LIFETIME="$p2_lifetime"     /usr/local/bin/php <<'PHP'
+ result=$(CTX_TUNNEL_INDEX="$idx"     CTX_REMOTE="$remote"     CTX_PSK="$psk"     CTX_LOCALIF="$local_if"     CTX_LOCAL_NET="$local_net"     CTX_REMOTE_NET="$remote_net"     CTX_P1_IKE="$p1_ike"     CTX_P1_ENC_NAME="$p1_enc_name"     CTX_P1_ENC_KEYLEN="$p1_enc_keylen"     CTX_P1_HASH="$p1_hash"     CTX_P1_DH="$p1_dh"     CTX_P1_LIFETIME="$p1_lifetime"     CTX_P2_PROTO="$p2_proto"     CTX_P2_ENC_NAME="$p2_enc_name"     CTX_P2_ENC_KEYLEN="$p2_enc_keylen"     CTX_P2_AUTH="$p2_auth"     CTX_P2_AUTH_RAW="$p2_auth_raw"     CTX_P2_PFS="$p2_pfs"     CTX_P2_LIFETIME="$p2_lifetime"     /usr/local/bin/php <<'PHP'
 <?php
 declare(strict_types=1);
-require_once('/etc/inc/config.inc');
-global $g;
-$g['disableconfigcache'] = true;
-$g['config_post_load'] = true;
+
 error_reporting(E_ERROR | E_PARSE);
-if (!file_exists('/tmp/config.cache')) {
-    @file_put_contents('/tmp/config.cache', '');
+$cacheFile = '/tmp/config.cache';
+$logFile = '/var/log/context.log';
+
+if (!is_file($cacheFile)) {
+    if (@file_put_contents($cacheFile, '') === false) {
+        file_put_contents($logFile, sprintf("%s [context-IPSEC][php] Failed to create %s\n", date('c'), $cacheFile), FILE_APPEND);
+        throw new RuntimeException(sprintf('Unable to create %s', $cacheFile));
+    }
 }
 
+global $g;
+if (!isset($g) || !is_array($g)) {
+    $g = [];
+}
+$g['disableconfigcache'] = true;
+$g['config_post_load'] = true;
+$g['config_cache_path'] = $cacheFile;
 require_once('/etc/inc/ipsec.inc');
 require_once('/etc/inc/util.inc');
 
@@ -386,14 +381,24 @@ if [ "$changed_tunnels" -gt 0 ]; then
   /usr/local/bin/php <<'PHP'
 <?php
 declare(strict_types=1);
-require_once('/etc/inc/config.inc');
+error_reporting(E_ERROR | E_PARSE);
+$cacheFile = '/tmp/config.cache';
+$logFile = '/var/log/context.log';
+
+if (!is_file($cacheFile)) {
+    if (@file_put_contents($cacheFile, '') === false) {
+        file_put_contents($logFile, sprintf("%s [context-IPSEC][php] Failed to create %s\n", date('c'), $cacheFile), FILE_APPEND);
+        throw new RuntimeException(sprintf('Unable to create %s', $cacheFile));
+    }
+}
+
 global $g;
+if (!isset($g) || !is_array($g)) {
+    $g = [];
+}
 $g['disableconfigcache'] = true;
 $g['config_post_load'] = true;
-error_reporting(E_ERROR | E_PARSE);
-if (!file_exists('/tmp/config.cache')) {
-    @file_put_contents('/tmp/config.cache', '');
-}
+$g['config_cache_path'] = $cacheFile;
 
 require_once('/etc/inc/ipsec.inc');
 require_once('/etc/inc/util.inc');
