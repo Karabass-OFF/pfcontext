@@ -99,15 +99,7 @@ for idx in $(seq 1 "$CONTEXT_IPSEC_TUNNELS"); do
 declare(strict_types=1);
 
 error_reporting(E_ERROR | E_PARSE);
-$cacheFile = '/tmp/config.cache';
 $logFile = '/var/log/context.log';
-
-if (!is_file($cacheFile)) {
-    if (@file_put_contents($cacheFile, '') === false) {
-        file_put_contents($logFile, sprintf("%s [context-IPSEC][php] Failed to create %s\n", date('c'), $cacheFile), FILE_APPEND);
-        throw new RuntimeException(sprintf('Unable to create %s', $cacheFile));
-    }
-}
 
 global $g;
 if (!isset($g) || !is_array($g)) {
@@ -115,7 +107,6 @@ if (!isset($g) || !is_array($g)) {
 }
 $g['disableconfigcache'] = true;
 $g['config_post_load'] = true;
-$g['config_cache_path'] = $cacheFile;
 require_once('/etc/inc/ipsec.inc');
 require_once('/etc/inc/util.inc');
 
@@ -382,15 +373,7 @@ if [ "$changed_tunnels" -gt 0 ]; then
 <?php
 declare(strict_types=1);
 error_reporting(E_ERROR | E_PARSE);
-$cacheFile = '/tmp/config.cache';
 $logFile = '/var/log/context.log';
-
-if (!is_file($cacheFile)) {
-    if (@file_put_contents($cacheFile, '') === false) {
-        file_put_contents($logFile, sprintf("%s [context-IPSEC][php] Failed to create %s\n", date('c'), $cacheFile), FILE_APPEND);
-        throw new RuntimeException(sprintf('Unable to create %s', $cacheFile));
-    }
-}
 
 global $g;
 if (!isset($g) || !is_array($g)) {
@@ -398,7 +381,6 @@ if (!isset($g) || !is_array($g)) {
 }
 $g['disableconfigcache'] = true;
 $g['config_post_load'] = true;
-$g['config_cache_path'] = $cacheFile;
 
 require_once('/etc/inc/ipsec.inc');
 require_once('/etc/inc/util.inc');
