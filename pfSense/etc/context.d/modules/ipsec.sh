@@ -5,7 +5,7 @@ LOG="/var/log/context.log"
 PHP="/usr/local/bin/php"
 CONFIGCTL="/usr/local/sbin/configctl"
 
-echo "$(date) [context-IPSEC] Starting IPSEC Context" >> "$LOG"
+echo "$(date) [context-IPSEC] === Starting IPSEC Context (selfheal) ===" >> "$LOG"
 
 # Проверяем, нужно ли включать
 if [ "${CONTEXT_IPSEC_ENABLE:-NO}" != "YES" ]; then
@@ -19,12 +19,17 @@ if [ "$TUNNELS" -eq 0 ]; then
   exit 0
 fi
 
-# Проверим текущие IPsec туннели (JSON)
-CURRENT_IPSEC=$($PHP -r '
-require_once("/etc/inc/ipsec.inc");
+# Самовосстановление структуры конфигурации IPsec и безопасный подсчет Phase1
+P1_COUNT=$($PHP -r '
 require_once("/etc/inc/config.inc");
-echo json_encode($config["ipsec"]["phase1"]);
+$changed = false;
+if (!isset($config["ipsec"]) || !is_array($config["ipsec"])) { $config["ipsec"] = []; $changed = true; }
+if (!isset($config["ipsec"]["phase1"]) || !is_array($config["ipsec"]["phase1"])) { $config["ipsec"]["phase1"] = []; $changed = true; }
+if (!isset($config["ipsec"]["phase2"]) || !is_array($config["ipsec"]["phase2"])) { $config["ipsec"]["phase2"] = []; $changed = true; }
+if ($changed) { write_config("Normalize IPsec arrays via context selfheal"); }
+echo (string)count($config["ipsec"]["phase1"]);
 ')
+echo "$(date) [context-IPSEC] Current phase1 entries: $P1_COUNT" >> "$LOG"
 
 # Счётчик туннелей
 i=1
@@ -42,20 +47,25 @@ while [ "$i" -le "$TUNNELS" ]; do
   EXIST=$($PHP -r "
 require_once('/etc/inc/config.inc');
 \$found = false;
-if (isset(\$config['ipsec']['phase1'])) {
-  foreach (\$config['ipsec']['phase1'] as \$p1) {
-    if (\$p1['remote-gateway'] == '$REMOTE') { \$found = true; break; }
-  }
+// Normalize to arrays to avoid PHP 8 type errors
+if (!isset(\$config['ipsec']) || !is_array(\$config['ipsec'])) { \$config['ipsec'] = []; }
+if (!isset(\$config['ipsec']['phase1']) || !is_array(\$config['ipsec']['phase1'])) { \$config['ipsec']['phase1'] = []; }
+foreach (\$config['ipsec']['phase1'] as \$p1) {
+  if (isset(\$p1['remote-gateway']) && \$p1['remote-gateway'] == '$REMOTE') { \$found = true; break; }
 }
 echo \$found ? 'YES' : 'NO';
 ")
 
   if [ "$EXIST" = "NO" ]; then
     echo "$(date) [context-IPSEC] Creating new tunnel to $REMOTE" >> "$LOG"
-    $PHP <<'EOF'
+    LOCALID="$LOCALID" REMOTE="$REMOTE" PSK="$PSK" LOCAL_NET="$LOCAL_NET" REMOTE_NET="$REMOTE_NET" $PHP <<'EOF'
 <?php
 require_once("/etc/inc/config.inc");
 require_once("/etc/inc/ipsec.inc");
+// Normalize IPsec config structures for PHP 8 strictness
+\$config['ipsec'] = (isset(\$config['ipsec']) && is_array(\$config['ipsec'])) ? \$config['ipsec'] : [];
+if (!isset(\$config['ipsec']['phase1']) || !is_array(\$config['ipsec']['phase1'])) { \$config['ipsec']['phase1'] = []; }
+if (!isset(\$config['ipsec']['phase2']) || !is_array(\$config['ipsec']['phase2'])) { \$config['ipsec']['phase2'] = []; }
 \$p1 = [
   'ikeid' => uniqid(),
   'disabled' => 'no',
