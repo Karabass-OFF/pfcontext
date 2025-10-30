@@ -42,10 +42,11 @@ while [ "$i" -le "$TUNNELS" ]; do
   EXIST=$($PHP -r "
 require_once('/etc/inc/config.inc');
 \$found = false;
-if (isset(\$config['ipsec']['phase1'])) {
-  foreach (\$config['ipsec']['phase1'] as \$p1) {
-    if (\$p1['remote-gateway'] == '$REMOTE') { \$found = true; break; }
-  }
+// Normalize to arrays to avoid PHP 8 type errors
+if (!isset(\$config['ipsec']) || !is_array(\$config['ipsec'])) { \$config['ipsec'] = []; }
+if (!isset(\$config['ipsec']['phase1']) || !is_array(\$config['ipsec']['phase1'])) { \$config['ipsec']['phase1'] = []; }
+foreach (\$config['ipsec']['phase1'] as \$p1) {
+  if (isset(\$p1['remote-gateway']) && \$p1['remote-gateway'] == '$REMOTE') { \$found = true; break; }
 }
 echo \$found ? 'YES' : 'NO';
 ")
@@ -56,6 +57,10 @@ echo \$found ? 'YES' : 'NO';
 <?php
 require_once("/etc/inc/config.inc");
 require_once("/etc/inc/ipsec.inc");
+// Normalize IPsec config structures for PHP 8 strictness
+\$config['ipsec'] = (isset(\$config['ipsec']) && is_array(\$config['ipsec'])) ? \$config['ipsec'] : [];
+if (!isset(\$config['ipsec']['phase1']) || !is_array(\$config['ipsec']['phase1'])) { \$config['ipsec']['phase1'] = []; }
+if (!isset(\$config['ipsec']['phase2']) || !is_array(\$config['ipsec']['phase2'])) { \$config['ipsec']['phase2'] = []; }
 \$p1 = [
   'ikeid' => uniqid(),
   'disabled' => 'no',
