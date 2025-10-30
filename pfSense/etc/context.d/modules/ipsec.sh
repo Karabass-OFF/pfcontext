@@ -387,6 +387,7 @@ function ctx_log(string $message): void {
     file_put_contents('/var/log/context.log', sprintf("%s [context-IPSEC][php] %s\n", date('c'), $message), FILE_APPEND);
 }
 
+
 try {
     ipsec_configure();
     ctx_log('ipsec_configure() executed successfully');
