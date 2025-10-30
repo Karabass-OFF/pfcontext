@@ -47,6 +47,21 @@ fi
 
 log "=== Starting IPSEC Context (version=${SCRIPT_VERSION}, path=${SCRIPT_PATH}) ==="
 
+ensure_config_cache() {
+  if [ ! -f /tmp/config.cache ]; then
+    if ! : > /tmp/config.cache 2>/dev/null; then
+      log "Unable to create /tmp/config.cache (check permissions)"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+if ! ensure_config_cache; then
+  log "Aborting: cannot prepare /tmp/config.cache"
+  exit 1
+fi
+
 get_var() {
   local idx="$1" key="$2" var
   var="CONTEXT_IPSEC_${idx}_${key}"
