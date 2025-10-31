@@ -68,8 +68,6 @@ done
 : "${CONTEXT_IPSEC_3_LOCAL_NET:=10.10.0.0/24}"
 : "${CONTEXT_IPSEC_3_REMOTE_NET:=10.40.0.0/24}"
 
-
-
 LOG_FILE="/var/log/context.log"
 SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo 'unknown')"
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || echo "$0")"
@@ -201,7 +199,7 @@ try {
         }
     }
 
-    $config['ipsec']['enable'] = true;
+    $config['ipsec']['enable'] = 'true';
 
     $localParts = explode('/', $localNet);
     $remoteParts = explode('/', $remoteNet);
@@ -273,8 +271,11 @@ try {
     $ph1['lifetime'] = $p1Lifetime;
     $ph1['nat_traversal'] = $ph1['nat_traversal'] ?? 'on';
     $ph1['mobike'] = $ph1['mobike'] ?? 'off';
-    $ph1['dpd_delay'] = $ph1['dpd_delay'] ?? '';
-    $ph1['dpd_maxfail'] = $ph1['dpd_maxfail'] ?? '';
+
+    // --- Dead Peer Detection (DPD) ---
+    $ph1['dpd_enable'] = 'true';     // включает галку "Enable DPD"
+    $ph1['dpd_delay']  = '10';     // интервал проверки, сек
+    $ph1['dpd_maxfail'] = '5';     // после 5 ошибок peer считается down
 
     if ($ph1Original !== $ph1) {
         if ($existingP1Index !== null) {
@@ -343,7 +344,7 @@ try {
         $p2['pfsgroup'] = $p2Pfs;
     }
     $p2['lifetime'] = $p2Lifetime;
-    $p2['keepalive'] = $p2['keepalive'] ?? 'disabled';
+    $p2['keepalive'] = 'enabled';
     $p2['descr'] = sprintf('[context] Tunnel #%d %s/%s → %s/%s', $idx, $localAddr, $localBits, $remoteAddr, $remoteBits);
 
     if ($p2Original !== $p2) {
@@ -444,6 +445,32 @@ try {
 }
 PHP
 fi
+
+# --- ensure strongSwan is running ---
+log "🔁 Ensuring strongSwan service is running"
+/usr/local/bin/php <<'PHP'
+<?php
+declare(strict_types=1);
+require_once('/etc/inc/service-utils.inc');
+require_once('/etc/inc/util.inc');
+
+function ctx_log(string $message): void {
+    file_put_contents('/var/log/context.log', sprintf("%s [context-IPSEC][php] %s\n", date('c'), $message), FILE_APPEND);
+}
+
+try {
+    $service = 'ipsec';
+    $status = get_service_status(['name' => $service]);
+    if ($status !== 'running') {
+        mwexec('/usr/local/sbin/ipsec start');
+        ctx_log('strongSwan started automatically');
+    } else {
+        ctx_log('strongSwan already running');
+    }
+} catch (Throwable $e) {
+    ctx_log('Failed to check/start strongSwan: ' . $e->getMessage());
+}
+PHP
 
 log "🧱 Applying IPsec firewall rules"
 
@@ -548,7 +575,6 @@ if ($rules_added > 0 || $rules_updated > 0) {
     ctx_log("No IPsec firewall rule changes");
 }
 PHP
-
 
 log "✅ Completed (Processed=${processed_tunnels}, Changed=${changed_tunnels})"
 
