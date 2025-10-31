@@ -1,17 +1,16 @@
-## v0.3.28 — 2025-10-30 17:21
+## ✨ Новое
+- Добавлена поддержка **Dead Peer Detection (DPD)**  
+  `dpd_enable=true`, `dpd_delay=10s`, `dpd_maxfail=5`
+- Включён **KeepAlive** для всех Phase 2 туннелей
+- Исправлено глобальное включение IPsec (`<enable>true</enable>`)
+- Автоматический запуск `ipsec_configure()` и strongSwan при применении контекста
+- Корректное отображение галочек DPD и KeepAlive в GUI pfSense
 
-# Please enter the commit message for your changes. Lines starting
-# with '#' will be ignored, and an empty message aborts the commit.
-#
-# On branch tested
-# Your branch is ahead of 'origin/tested' by 1 commit.
-#   (use "git push" to publish your local commits)
-#
-# Changes to be committed:
-#	modified:   CHANGELOG.md
-#	modified:   pfSense/etc/context.d/VERSION
-#
+## 🔧 Улучшения
+- Идемпотентная логика — повторный запуск не создаёт дубликаты
+- Автоматическое применение правил фаервола для policy-based туннелей
+- Совместимость: pfSense 2.7.x / 2.8.x
 
-## v0.3.27 — 2025-10-30 17:21
-first work no stable  ipsec
-
+## ✅ Проверено
+- DPD и KeepAlive работают, отображаются в `swanctl --list-conns`
+- Конфигурация сохраняется и восстанавливается после перезагрузки
