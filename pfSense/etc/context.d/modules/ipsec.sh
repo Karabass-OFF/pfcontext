@@ -6,30 +6,69 @@ set -eu
 # ============================================================
 
 : "${CONTEXT_IPSEC_ENABLE:=YES}"
-: "${CONTEXT_IPSEC_TUNNELS:=1}"
-
-# --- Tunnel #1 (Policy-based, test) ---
-: "${CONTEXT_IPSEC_1_REMOTE:=203.0.113.10}"
-: "${CONTEXT_IPSEC_1_PSK:=SuperSecretKey123}"
-: "${CONTEXT_IPSEC_1_LOCALID:=wan}"
-: "${CONTEXT_IPSEC_1_LOCAL_NET:=10.10.0.0/24}"
-: "${CONTEXT_IPSEC_1_REMOTE_NET:=10.20.0.0/24}"
+: "${CONTEXT_IPSEC_TUNNELS:=3}"
 
 # --- Phase1 (IKE) ---
-: "${CONTEXT_IPSEC_1_P1_IKE:=ikev2}"
-: "${CONTEXT_IPSEC_1_P1_ENC_NAME:=aes}"
-: "${CONTEXT_IPSEC_1_P1_ENC_KEYLEN:=256}"
-: "${CONTEXT_IPSEC_1_P1_HASH:=sha256}"
-: "${CONTEXT_IPSEC_1_P1_DH:=14}"
-: "${CONTEXT_IPSEC_1_P1_LIFETIME:=28800}"
+: "${IPSEC_P1_IKE:=ikev2}"
+: "${IPSEC_P1_ENC_NAME:=aes}"
+: "${IPSEC_P1_ENC_KEYLEN:=256}"
+: "${IPSEC_P1_HASH:=sha256}"
+: "${IPSEC_P1_DH:=14}"
+: "${IPSEC_P1_LIFETIME:=86400}"
 
 # --- Phase2 (ESP) ---
-: "${CONTEXT_IPSEC_1_P2_PROTO:=esp}"
-: "${CONTEXT_IPSEC_1_P2_ENC_NAME:=aes}"
-: "${CONTEXT_IPSEC_1_P2_ENC_KEYLEN:=256}"
-: "${CONTEXT_IPSEC_1_P2_AUTH:=sha256}"
-: "${CONTEXT_IPSEC_1_P2_PFS:=off}"
-: "${CONTEXT_IPSEC_1_P2_LIFETIME:=3600}"
+: "${IPSEC_P2_PROTO:=esp}"
+: "${IPSEC_P2_ENC_NAME:=aes}"
+: "${IPSEC_P2_ENC_KEYLEN:=256}"
+: "${IPSEC_P2_AUTH:=sha256}"
+: "${IPSEC_P2_PFS:=14}"
+: "${IPSEC_P2_LIFETIME:=28800}"
+
+# ============================================================
+# 🔁 Применяем дефолты ко всем туннелям
+# ============================================================
+
+for i in $(seq 1 "$CONTEXT_IPSEC_TUNNELS"); do
+  # Phase1
+  eval ": \"\${CONTEXT_IPSEC_${i}_P1_IKE:=${IPSEC_P1_IKE}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P1_ENC_NAME:=${IPSEC_P1_ENC_NAME}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P1_ENC_KEYLEN:=${IPSEC_P1_ENC_KEYLEN}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P1_HASH:=${IPSEC_P1_HASH}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P1_DH:=${IPSEC_P1_DH}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P1_LIFETIME:=${IPSEC_P1_LIFETIME}}\""
+
+  # Phase2
+  eval ": \"\${CONTEXT_IPSEC_${i}_P2_PROTO:=${IPSEC_P2_PROTO}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P2_ENC_NAME:=${IPSEC_P2_ENC_NAME}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P2_ENC_KEYLEN:=${IPSEC_P2_ENC_KEYLEN}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P2_AUTH:=${IPSEC_P2_AUTH}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P2_PFS:=${IPSEC_P2_PFS}}\""
+  eval ": \"\${CONTEXT_IPSEC_${i}_P2_LIFETIME:=${IPSEC_P2_LIFETIME}}\""
+done
+
+# ============================================================
+# 🧠 Пример конкретных туннелей (меняются только уникальные)
+# ============================================================
+
+: "${CONTEXT_IPSEC_1_REMOTE:=91.185.11.170}"
+: "${CONTEXT_IPSEC_1_PSK:=e64f13bbab157151d8555bde068a0350dc84737efc7df32f6f822909}"
+: "${CONTEXT_IPSEC_1_LOCALID:=wan}"
+: "${CONTEXT_IPSEC_1_LOCAL_NET:=192.168.201.0/24}"
+: "${CONTEXT_IPSEC_1_REMOTE_NET:=10.11.11.0/24}"
+
+: "${CONTEXT_IPSEC_2_REMOTE:=203.0.113.20}"
+: "${CONTEXT_IPSEC_2_PSK:=SecretB}"
+: "${CONTEXT_IPSEC_2_LOCALID:=wan}"
+: "${CONTEXT_IPSEC_2_LOCAL_NET:=10.10.0.0/24}"
+: "${CONTEXT_IPSEC_2_REMOTE_NET:=10.30.0.0/24}"
+
+: "${CONTEXT_IPSEC_3_REMOTE:=203.0.113.30}"
+: "${CONTEXT_IPSEC_3_PSK:=SecretC}"
+: "${CONTEXT_IPSEC_3_LOCALID:=wan}"
+: "${CONTEXT_IPSEC_3_LOCAL_NET:=10.10.0.0/24}"
+: "${CONTEXT_IPSEC_3_REMOTE_NET:=10.40.0.0/24}"
+
+
 
 LOG_FILE="/var/log/context.log"
 SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo 'unknown')"
@@ -46,13 +85,14 @@ if [ "${CONTEXT_IPSEC_ENABLE}" != "YES" ]; then
 fi
 
 log "=== Starting IPSEC Context (version=${SCRIPT_VERSION}, path=${SCRIPT_PATH}) ==="
-
+# shellcheck shell=sh disable=SC3043,SC1083,SC2086
 get_var() {
   local idx="$1" key="$2" var
   var="CONTEXT_IPSEC_${idx}_${key}"
   eval "printf '%s' "\${${var}:-}""
 }
 
+# shellcheck shell=sh disable=SC3043
 normalize_auth() {
   local value="$1"
   case "$value" in
@@ -84,7 +124,8 @@ for idx in $(seq 1 "$CONTEXT_IPSEC_TUNNELS"); do
   p2_auth="$(normalize_auth "$p2_auth_raw")"
   p2_pfs="$(get_var "$idx" P2_PFS)"
   p2_lifetime="$(get_var "$idx" P2_LIFETIME)"
-
+   # Логируем, какой туннель сейчас обрабатывается
+  log "→ Processing tunnel #${idx} (${local_if} → ${remote})"
   [ -n "$remote" ] || { log "→ Tunnel #${idx}: remote gateway is empty — skipping"; continue; }
   [ -n "$psk" ] || { log "→ Tunnel #${idx}: PSK is empty — skipping"; continue; }
   [ -n "$local_if" ] || { log "→ Tunnel #${idx}: LOCALID is empty — skipping"; continue; }
@@ -118,21 +159,12 @@ function ctx_log(string $message): void {
 }
 
 set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline): bool {
-    // Если ошибка подавлена через @, не трогаем
-    if (error_reporting() === 0) {
+    if ((error_reporting() & $errno) === 0) {
         return false;
     }
     ctx_log(sprintf('PHP error %d at %s:%d — %s', $errno, $errfile, $errline, $errstr));
-    return true; // Не пробрасываем ошибку дальше, просто логируем
 });
 
-register_shutdown_function(function () {
-    $e = error_get_last();
-    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
-        ctx_log(sprintf('FATAL %d at %s:%d — %s', $e['type'], $e['file'], $e['line'], $e['message']));
-        echo 'error|0|0';
-    }
-});
 $idx = (int) (getenv('CTX_TUNNEL_INDEX') ?: 0);
 $remote = trim((string) (getenv('CTX_REMOTE') ?: ''));
 $psk = (string) (getenv('CTX_PSK') ?: '');
@@ -304,6 +336,7 @@ try {
         ],
     ];
     $p2['hash-algorithm-option'] = [$p2Auth];
+    $p2['start_action'] = 'start'; //  заставит pfSense инициировать туннель сам
     if ($p2Pfs === '' || $p2Pfs === 'off' || $p2Pfs === 'none') {
         $p2['pfsgroup'] = 'off';
     } else {
@@ -383,7 +416,7 @@ if [ "$changed_tunnels" -gt 0 ]; then
   /usr/local/bin/php <<'PHP'
 <?php
 declare(strict_types=1);
-error_reporting(E_ALL & ~E_NOTICE);
+error_reporting(E_ERROR | E_PARSE);
 $logFile = '/var/log/context.log';
 
 global $g;
@@ -391,10 +424,11 @@ if (!isset($g) || !is_array($g)) {
     $g = [];
 }
 $g['disableconfigcache'] = true;
+unset($g['config_cache_path']);
 $g['config_post_load'] = true;
-
-require_once('/etc/inc/ipsec.inc');
 require_once('/etc/inc/util.inc');
+require_once('/etc/inc/ipsec.inc');
+
 
 function ctx_log(string $message): void {
     file_put_contents('/var/log/context.log', sprintf("%s [context-IPSEC][php] %s\n", date('c'), $message), FILE_APPEND);
@@ -410,6 +444,111 @@ try {
 }
 PHP
 fi
+
+log "🧱 Applying IPsec firewall rules"
+
+/usr/local/bin/php <<'PHP'
+<?php
+declare(strict_types=1);
+error_reporting(E_ERROR | E_PARSE);
+
+require_once('/etc/inc/config.inc');
+require_once('/etc/inc/globals.inc');
+require_once('/etc/inc/util.inc');
+require_once('/etc/inc/ipsec.inc');
+require_once('/etc/inc/filter.inc');
+
+
+function ctx_log(string $msg): void {
+    file_put_contents('/var/log/context.log',
+        sprintf("%s [context-IPSEC][fw] %s\n", date('c'), $msg),
+        FILE_APPEND);
+}
+
+global $config;
+if (!isset($config['filter']) || !is_array($config['filter'])) $config['filter'] = [];
+if (!isset($config['filter']['rule']) || !is_array($config['filter']['rule'])) $config['filter']['rule'] = [];
+
+$rules_added = 0;
+$rules_updated = 0;
+
+$phase2 = $config['ipsec']['phase2'] ?? [];
+foreach ($phase2 as $p2) {
+    // Берём только network→network (policy-based)
+    $lid = $p2['localid']  ?? [];
+    $rid = $p2['remoteid'] ?? [];
+    if (($lid['type'] ?? '') !== 'network' || ($rid['type'] ?? '') !== 'network') {
+        continue;
+    }
+
+    $localNet  = trim(($lid['address'] ?? '').'/' .($lid['netbits'] ?? ''));
+    $remoteNet = trim(($rid['address'] ?? '').'/'.($rid['netbits'] ?? ''));
+    if ($localNet === '' || $remoteNet === '') continue;
+
+    $descr = sprintf('[context] IPsec %s → %s', $remoteNet, $localNet);
+    $uuid  = md5($descr);
+
+    // Проверяем, есть ли уже такое правило
+    $found = false;
+    foreach ($config['filter']['rule'] as &$rule) {
+        if (($rule['interface'] ?? '') === 'ipsec' && ($rule['descr'] ?? '') === $descr) {
+            $rule['source']      = ['network' => $remoteNet];
+            $rule['destination'] = ['network' => $localNet];
+            $rule['updated']     = date('c');
+            $rule['disabled']    = 'no';
+            $found = true;
+            $rules_updated++;
+            ctx_log("Updated rule: $descr");
+            break;
+        }
+    }
+    unset($rule);
+
+    if (!$found) {
+        $config['filter']['rule'][] = [
+            'type'           => 'pass',
+            'interface'      => 'ipsec',       // интерфейс в GUI
+            'apply_to_ipsec' => 'yes',         // 👈 обязательно для pfSense 2.8+
+            'ipprotocol'     => 'inet',
+            'protocol'       => 'any',
+            'source'         => ['network' => $remoteNet],
+            'destination'    => ['network' => $localNet],
+            'descr'          => $descr,
+            'direction'      => 'any',
+            'quick'          => 'yes',
+            'log'            => 'yes',
+            'disabled'       => 'no',
+            'created'        => date('c'),
+            'updated'        => date('c'),
+            'uuid'           => $uuid,
+        ];
+        $rules_added++;
+        ctx_log("Added rule: $descr");
+    }
+}
+
+if ($rules_added > 0 || $rules_updated > 0) {
+    write_config("[context-IPSEC] Firewall rules (added=$rules_added, updated=$rules_updated)", false);
+
+    // Попробуем мягко перезагрузить фаервол
+    if (function_exists('filter_configure_sync')) {
+        try {
+            @filter_configure_sync();
+            ctx_log("Reloaded pf ruleset via filter_configure_sync()");
+        } catch (Throwable $e) {
+            ctx_log("WARNING: filter_configure_sync() failed: " . $e->getMessage());
+            mwexec('/etc/rc.filter_configure');
+            ctx_log("Fallback: executed /etc/rc.filter_configure");
+        }
+    } else {
+        ctx_log("filter_configure_sync() not available — calling /etc/rc.filter_configure instead");
+        mwexec('/etc/rc.filter_configure');
+    }
+} else {
+    ctx_log("No IPsec firewall rule changes");
+}
+PHP
+
 
 log "✅ Completed (Processed=${processed_tunnels}, Changed=${changed_tunnels})"
 
