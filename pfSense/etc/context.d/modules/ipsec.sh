@@ -565,7 +565,7 @@ fi
 
 # 6) Неблокирующий «пуллинг» до 8с чисто для логов (не обязан находить SA)
 deadline=$(( $(date +%s) + 8 ))
-while [ $(date +%s) -lt $deadline ]; do
+while [ "$(date +%s)" -lt $deadline ]; do
   if /usr/local/sbin/swanctl --list-sas 2>/dev/null | grep -q '^con'; then
     break
   fi
