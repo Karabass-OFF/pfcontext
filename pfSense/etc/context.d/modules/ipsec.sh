@@ -338,6 +338,10 @@ function ctx_log(string $m): void {
 
 try {
   ipsec_configure();
+  if (function_exists('send_event')) {
+    send_event('service reload ipsec');
+    ctx_log('Triggered send_event("service reload ipsec")');
+  }
   ctx_log('ipsec_configure() executed successfully');
 } catch (Throwable $e) {
   ctx_log('ipsec_configure() failed: '.$e->getMessage());
@@ -372,44 +376,42 @@ try {
 PHP
 
 # ============================================================
-# 🧩 Firewall rules — WAN & IPsec (GUI-visible)
+# 🧩 Firewall rules — multi-interface (WAN/LAN/OPT/...) без aliаsов
 # ============================================================
-log "Applying firewall rules (WAN + IPsec)"
+log "Applying firewall rules (multi-interface, no aliases)"
 /usr/local/bin/php <<'PHP'
 <?php
 declare(strict_types=1);
+
 require_once('/etc/inc/config.inc');
 require_once('/etc/inc/util.inc');
 require_once('/etc/inc/interfaces.inc');
+if (file_exists('/etc/inc/shaper.inc')) require_once('/etc/inc/shaper.inc');
 require_once('/etc/inc/filter.inc');
 
-function ctx_log($m){file_put_contents('/var/log/context.log',date('c')." [context-IPSEC][fw] $m\n",FILE_APPEND);}
+if (!function_exists('filter_generate_dummynet_rules')) {
+  function filter_generate_dummynet_rules(): string { return ''; }
+}
+
+function ctx_log(string $m): void {
+  file_put_contents('/var/log/context.log', date('c')." [context-IPSEC][fw] $m\n", FILE_APPEND);
+}
+
+/* Получить адрес интерфейса для destination; иначе (self) */
+function iface_dst_ip_or_self(string $iface): array {
+  $ip = get_interface_ip($iface) ?: '';
+  if ($ip !== '') return ['address' => $ip];
+  return ['address' => '(self)'];
+}
+
 global $config;
 
-/* --- Ensure WAN interface mapping --- */
-$wan_if = 'wan';
-$real   = get_real_interface($wan_if);
-if (empty($real)) {
-  $ifs = get_interface_list();
-  foreach ($ifs as $dev=>$info) {
-    if (!empty($info['up'])) { $config['interfaces'][$wan_if]['if'] = $dev; ctx_log("WAN bound to $dev"); break; }
-  }
-  write_config('[context-IPSEC] Bound WAN interface dynamically', false);
-}
-/* ВАЖНО: применяем конфиг интерфейсов до получения IP */
-interfaces_configure(false);
-
-/* Получаем IPv4 WAN; если пусто — будет fallback к (self), но это риск skip */
-$wan_ip = get_interface_ip($wan_if) ?: '';
-if ($wan_ip === '') {
-  ctx_log('WARNING: WAN has no IPv4 yet; rules with (self) may be skipped until address is assigned');
-}
-
+/* Гарантируем массив правил */
 if (!isset($config['filter']['rule']) || !is_array($config['filter']['rule'])) {
   $config['filter']['rule'] = [];
 }
 
-/* Helper: find rule by iface+descr */
+/* Поиск правила по iface+descr */
 $find_rule = function(string $iface, string $descr): ?int {
   global $config;
   foreach ($config['filter']['rule'] as $i => $r) {
@@ -418,81 +420,103 @@ $find_rule = function(string $iface, string $descr): ?int {
   return null;
 };
 
-/* --- WAN Rules (IKE, NAT-T, ESP) --- */
-$remotes = [];
+/* --- 1) IKE/NAT-T/ESP на интерфейсах Phase1 --- */
 foreach (($config['ipsec']['phase1'] ?? []) as $p1) {
-  if (!empty($p1['remote-gateway'])) $remotes[] = $p1['remote-gateway'];
-}
-$remotes = array_values(array_unique($remotes));
+  $iface  = $p1['interface'] ?? 'wan';
+  $remote = trim((string)($p1['remote-gateway'] ?? ''));
+  if ($remote === '') continue;
 
-foreach ($remotes as $remote) {
+  $dst = iface_dst_ip_or_self($iface);
+  if ($dst['address'] === '(self)') {
+    ctx_log("NOTICE: $iface has no IPv4 yet; using (self) to avoid alias issues");
+  } else {
+    ctx_log("Using concrete IP {$dst['address']} as destination on $iface");
+  }
+
   $defs = [
-    ['proto'=>'udp','port'=>'500',  'descr'=>"[context] IKE (500) from $remote"],
-    ['proto'=>'udp','port'=>'4500', 'descr'=>"[context] NAT-T (4500) from $remote"],
-    ['proto'=>'esp','port'=>'',     'descr'=>"[context] ESP from $remote"],
+    ['proto' => 'udp', 'port' => '500',  'descr' => "[context] IKE (500) from $remote"],
+    ['proto' => 'udp', 'port' => '4500', 'descr' => "[context] NAT-T (4500) from $remote"],
+    ['proto' => 'esp', 'port' => '',     'descr' => "[context] ESP from $remote"],
   ];
-  foreach ($defs as $r) {
-    $dst = ($wan_ip !== '')
-      ? (['address'=>$wan_ip] + ($r['port']!=='' ? ['port'=>$r['port']] : []))
-      : (['address'=>'(self)'] + ($r['port']!=='' ? ['port'=>$r['port']] : []));
 
-    $idx = $find_rule($wan_if, $r['descr']);
+  foreach ($defs as $r) {
+    $dst_rule = $dst;
+    if ($r['port'] !== '') $dst_rule['port'] = $r['port'];
+
+    $idx = $find_rule($iface, $r['descr']);
     if ($idx !== null) {
-      // обновляем и включаем
-      $config['filter']['rule'][$idx]['protocol']    = $r['proto'];
-      $config['filter']['rule'][$idx]['source']      = ['address'=>$remote];
-      $config['filter']['rule'][$idx]['destination'] = $dst;
-      $config['filter']['rule'][$idx]['ipprotocol']  = 'inet';
-      $config['filter']['rule'][$idx]['updated']     = date('c');
-      unset($config['filter']['rule'][$idx]['disabled']);
-      ctx_log("Updated WAN rule: {$r['descr']} (dst=".($wan_ip?:'(self)').")");
-    } else {
-      $row = [
+      $config['filter']['rule'][$idx] = array_merge($config['filter']['rule'][$idx], [
         'type'        => 'pass',
-        'interface'   => $wan_if,
         'ipprotocol'  => 'inet',
         'protocol'    => $r['proto'],
-        'source'      => ['address'=>$remote],
-        'destination' => $dst,
+        'source'      => ['address' => $remote],
+        'destination' => $dst_rule,
+        'updated'     => date('c'),
+      ]);
+      unset($config['filter']['rule'][$idx]['disabled']);
+      ctx_log("Updated rule on $iface: {$r['descr']}");
+    } else {
+      $config['filter']['rule'][] = [
+        'type'        => 'pass',
+        'interface'   => $iface,
+        'ipprotocol'  => 'inet',
+        'protocol'    => $r['proto'],
+        'source'      => ['address' => $remote],
+        'destination' => $dst_rule,
         'descr'       => $r['descr'],
         'created'     => date('c'),
         'updated'     => date('c'),
       ];
-      $config['filter']['rule'][] = $row; // без 'disabled'
-      ctx_log("Added WAN rule: {$r['descr']} (dst=".($wan_ip?:'(self)').")");
+      ctx_log("Added rule on $iface: {$r['descr']}");
     }
   }
 }
 
-/* --- IPsec Rules (phase2 networks) --- */
+/* --- 2) Разрешающие правила на IPsec для сетей Phase2 --- */
 foreach (($config['ipsec']['phase2'] ?? []) as $p2) {
   $lid = $p2['localid']  ?? [];
   $rid = $p2['remoteid'] ?? [];
   if (($lid['type'] ?? '') !== 'network' || ($rid['type'] ?? '') !== 'network') continue;
 
-  $lnet  = $lid['address'].'/'.$lid['netbits'];
-  $rnet  = $rid['address'].'/'.$rid['netbits'];
-  $descr = "[context] IPsec $rnet → $lnet";
+  $la = trim((string)($lid['address'] ?? ''));
+  $lb = (string)($lid['netbits'] ?? '');
+  $ra = trim((string)($rid['address'] ?? ''));
+  $rb = (string)($rid['netbits'] ?? '');
+  if ($la === '' || $lb === '' || $ra === '' || $rb === '') continue;
+
+  $descr = "[context] IPsec {$ra}/{$rb} → {$la}/{$lb}";
+  $src = [
+    'type'    => 'network',   // или 'address'
+    'network' => "{$ra}/{$rb}"
+  ];
+  $dst = [
+    'type'    => 'network',   // или 'address'
+    'network' => "{$la}/{$lb}"
+];
 
   $idx = $find_rule('ipsec', $descr);
   if ($idx !== null) {
-    $config['filter']['rule'][$idx]['source']         = ['network'=>$rnet];
-    $config['filter']['rule'][$idx]['destination']    = ['network'=>$lnet];
-    $config['filter']['rule'][$idx]['ipprotocol']     = 'inet';
-    $config['filter']['rule'][$idx]['protocol']       = 'any';
-    $config['filter']['rule'][$idx]['apply_to_ipsec'] = 'yes';
-    $config['filter']['rule'][$idx]['updated']        = date('c');
+    $config['filter']['rule'][$idx] = array_merge($config['filter']['rule'][$idx], [
+      'type'           => 'pass',
+      'interface'      => 'ipsec',
+      'ipprotocol'     => 'inet',
+      'protocol'       => 'any',
+      'source'         => $src,
+      'destination'    => $dst,
+      'apply_to_ipsec' => 'yes',
+      'updated'        => date('c'),
+    ]);
     unset($config['filter']['rule'][$idx]['disabled']);
     ctx_log("Updated IPsec rule: $descr");
   } else {
     $config['filter']['rule'][] = [
       'type'           => 'pass',
       'interface'      => 'ipsec',
-      'apply_to_ipsec' => 'yes',
       'ipprotocol'     => 'inet',
       'protocol'       => 'any',
-      'source'         => ['network'=>$rnet],
-      'destination'    => ['network'=>$lnet],
+      'source'         => $src,
+      'destination'    => $dst,
+      'apply_to_ipsec' => 'yes',
       'descr'          => $descr,
       'created'        => date('c'),
       'updated'        => date('c'),
@@ -501,9 +525,15 @@ foreach (($config['ipsec']['phase2'] ?? []) as $p2) {
   }
 }
 
-write_config('[context-IPSEC] Applied firewall rules (enabled, explicit WAN IP)', false);
-filter_configure_sync();
-ctx_log('Firewall reloaded successfully');
+/* --- 3) Сохранить и применить --- */
+write_config('[context-IPSEC] Applied firewall rules (no-alias)', false);
+try {
+  filter_configure_sync();
+  ctx_log('Firewall reloaded successfully');
+} catch (Throwable $e) {
+  ctx_log('filter_configure_sync() failed: '.$e->getMessage().'; sending filter reload');
+  if (function_exists('send_event')) send_event('filter reload');
+}
 PHP
 
 # ============================================================

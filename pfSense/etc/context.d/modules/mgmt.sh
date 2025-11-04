@@ -16,7 +16,7 @@
 : "${MGMT_ENABLE:=YES}"
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,80,443}"
-: "${MGMT_SRC:=lan:any}"
+: "${MGMT_SRC:=lan:192.168.0.0/16}"
 : "${MGMT_SRC_DEFAULT_IF:=ipsec}"
 
 LOG_FILE="/var/log/context.log"
