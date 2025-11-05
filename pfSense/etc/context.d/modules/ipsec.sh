@@ -550,7 +550,9 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   [ -n "$WAN_IP" ] && break
   sleep 1
 done
-[ -n "$WAN_IP" ] && log "  WAN IPv4: ${WAN_IP}" || log "  WARNING: WAN IPv4 empty"
+#[ -n "$WAN_IP" ] && log "  WAN IPv4: ${WAN_IP}" || log "  WARNING: WAN IPv4 empty"
+[ -n "$WAN_IP" ] && log "WAN IPv4: ${WAN_IP}" || true
+[ -z "$WAN_IP" ] && log "WARNING: WAN IPv4 empty"
 
 # 2) Убедиться, что VICI есть; если нет — быстрый рестарт стартера
 [ -S /var/run/charon.vici ] || { /usr/local/sbin/ipsec stop >/dev/null 2>&1 || true; sleep 1; /usr/local/sbin/ipsec start >/dev/null 2>&1 || true; sleep 1; }
@@ -563,10 +565,11 @@ done
 names=$(/usr/local/sbin/swanctl --list-conns 2>/dev/null | awk -F: '/^[A-Za-z0-9._-]+:/{print $1}' | grep -v '^bypass$' | sort -Vu)
 if [ -z "$names" ]; then
   names="$(
+    # shellcheck disable=SC2016
     /usr/local/bin/php -r 'require_once("/etc/inc/config.inc"); foreach (($config["ipsec"]["phase1"] ?? []) as $p1) if (!empty($p1["ikeid"])) echo "con".$p1["ikeid"], "\n";' 2>/dev/null \
     | sort -Vu
   )"
-  log "  VICI empty, fallback names: $(echo $names)"
+  log "  VICI empty, fallback names: $(printf '%s' "$names")"
 fi
 
 # 5) Асинхронное инициирование (fire-and-forget), без ожидания ответа peer

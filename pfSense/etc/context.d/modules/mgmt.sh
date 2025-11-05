@@ -285,4 +285,4 @@ else
 fi
 
 log "Context script finished"
-exit 0
+return 0

@@ -316,12 +316,12 @@ else
 fi
 # Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
 # RC_RELOAD_IFACE=on|off (по умолчанию off)
-hash1="$(xml sel -t -c "//interfaces" "$xml_file" | md5)"
-hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | md5)"
+hash1="$(xml sel -t -c "//interfaces" "$xml_file" | xml fo -n -o | tr -d '\n' | md5)"
+hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | xml fo -n -o | tr -d '\n' | md5)"
 if [ "$hash1" != "$hash2" ]; then
-   { echo "$(date) [context] Interfaces section changed, need to reload interfaces" 
-     echo "$(date) [context] Old hash: $hash1" 
-     echo "$(date) [context] New hash: $hash2" 
+   { echo "$(date) [context] Interfaces section changed, need to reload interfaces set RC_RELOAD_IFACE=on"
+     echo "$(date) [context] Old interfaces config hash: $hash1"
+     echo "$(date) [context] New interfaces config hash: $hash2"
     }>> "$LOG"
     RC_RELOAD_IFACE="on"
 fi
@@ -339,7 +339,7 @@ done
 # Настраиваем шлюз по умолчанию для WAN ecли он указан и отличается от текущего       
 if [ -n "$WAN_GATEWAY" ]; then
     network="wan"
-    sleep 0.1
+    sleep 0.2
     if [ "$current_gw" != "$WAN_GATEWAY" ]; then # Меняем шлюз, только если он отличается от текущего 
         { echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $WAN_GATEWAY — updating route (BGP off)" 
           route delete default 
@@ -441,7 +441,7 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
     # Приводим значение к нижнему регистру для удобства сравнения   
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
-        no|off|0|false|disabled)
+        no|0)
             {
                 if pfctl -s info 2>/dev/null | grep -qi 'Status: Enabled'; then
                     pfctl -d
@@ -453,7 +453,7 @@ if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указан�
                 echo "$(date) [context] Created pid file: /var/run/pfctlcontext.pid"
             } >> "$LOG" 2>&1
             ;;
-        yes|on|1|true|enabled)
+        yes|1)
             if pfctl -s info | grep -qi 'Status: Disabled'; then
                 {
                     echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
@@ -505,6 +505,7 @@ if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
         #RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
     fi
 fi
+
 # Модуль управления management-интерфейсом
 MGMT_MODULE="/etc/context.d/modules/mgmt.sh"
 if [ -x "$MGMT_MODULE" ]; then
@@ -514,10 +515,15 @@ if [ -x "$MGMT_MODULE" ]; then
     . "$MGMT_MODULE" >>"$LOG" 2>&1
     status=$?
     if [ $status -eq 0 ]; then
-        echo "$(date) [context] MGMT module finished successfully" >> "$LOG"
+        echo "$(date) [context-MGMT:ContextOnly] module finished successfully" >> "$LOG"
     else
-        echo "$(date) [context] MGMT module failed (exit $status)" >> "$LOG"
+        echo "$(date) [context-MGMT:ContextOnly] MGMT module failed (exit $status)" >> "$LOG"
     fi
 fi
-rm -f "$PID" # Удаляем PID файл, если он есть
+if [ -f "$PID" ]; then
+    {
+        echo "$(date) [context] Файл найден: $PID = cat $PID" 
+        rm -f "$(date) [context] $PID" && echo "Файл $PID удалён."
+    } >> "$LOG"
+fi
 echo "$(date) [context] FINISH" >> "$LOG"

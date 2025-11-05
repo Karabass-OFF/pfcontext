@@ -13,12 +13,12 @@ if [ "$UPTIME" -lt 60 ]; then
             exit 0
         fi
     fi
-	echo -e "${RED}*** SYSTEM UPTIME IS $UPTIME seconds, STARTING CONTEXT SERVICES PLESE WAIT 60-$UPTIME seconds ***${RESET}\n"
+	printf "%b*** SYSTEM UPTIME IS %s seconds, STARTING CONTEXT SERVICES PLEASE WAIT 60-%s seconds ***%b\n" "$RED" "$UPTIME" "$UPTIME" "$RESET"
     $SERVICE1 onestart 
     $SERVICE2 onestart && echo "$UPTIME" > "$STATE_FILE"
 fi
 if [ "$UPTIME" -ge 60 ]; then
-	echo -e "${GREEN}*** SYSTEM ALLREADY STARTED ***${RESET}\n"
+	printf "%b*** SYSTEM ALREADY STARTED ***%b\n" "$GREEN" "$RESET"
 fi
 
 #
