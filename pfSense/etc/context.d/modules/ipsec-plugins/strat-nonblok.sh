@@ -1,3 +1,4 @@
+# shellcheck shell=sh disable=SC2034
 # ============================================================
 # 🚀 Force immediate IPsec initiation — non-blocking
 # ============================================================
