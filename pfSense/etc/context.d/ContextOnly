@@ -46,8 +46,6 @@ if [ -f "$CONTEXT_FILE" ]; then
         fi
         printf '%s' "${val:-}"
     }
-    # Проверяем текущий шлюз по умолчанию и меняем его, только если он не совпадает с нужным и выключен BGP
-    current_gw=$(netstat -rn | awk '/^0.0.0.0/ {print $2; exit}')    
 else
     echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
     exit 0
@@ -314,17 +312,6 @@ else
         echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
     fi
 fi
-# Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
-# RC_RELOAD_IFACE=on|off (по умолчанию off)
-hash1="$(xml sel -t -c "//interfaces" "$xml_file" | xml fo -n -o | tr -d '\n' | md5)"
-hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | xml fo -n -o | tr -d '\n' | md5)"
-if [ "$hash1" != "$hash2" ]; then
-   { echo "$(date) [context] Interfaces section changed, need to reload interfaces set RC_RELOAD_IFACE=on"
-     echo "$(date) [context] Old interfaces config hash: $hash1"
-     echo "$(date) [context] New interfaces config hash: $hash2"
-    }>> "$LOG"
-    RC_RELOAD_IFACE="on"
-fi
 # получаем шлюз WAN из контекстных переменных по MAC адресу интерфейса WAN 
 for ifeth in $(ifconfig -l); do
     eth_mac=$(ifconfig "$ifeth" | awk '/ether/ {print $2}')
@@ -336,7 +323,8 @@ for ifeth in $(ifconfig -l); do
         echo "$(date) [context] Detected WAN_GATEWAY=$WAN_GATEWAY from $eth" >> "$LOG"
     fi
 done
-# Настраиваем шлюз по умолчанию для WAN ecли он указан и отличается от текущего       
+# Проверяем текущий шлюз по умолчанию 
+current_gw=$(netstat -rn | awk '/^0.0.0.0/ {print $2; exit}') 
 if [ -n "$WAN_GATEWAY" ]; then
     network="wan"
     sleep 0.2
@@ -366,11 +354,8 @@ if [ -n "$WAN_GATEWAY" ]; then
             -u "//gateways/defaultgw4" -v "WANGW" \
             "$backup_xml_file"
         # Привязываем шлюз WANGW к интерфейсу WAN, если его нет
-        if xml sel -t -v "//interfaces/$network/gateway" "$backup_xml_file" >/dev/null 2>&1; then
-            xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" "$backup_xml_file"
-        else
             xml ed -L -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" "$backup_xml_file"
-        fi 
+            echo "$(date) [context] Added gateway WANGW to $network" >> "$LOG"
     elif [ "$current_gw" = "$WAN_GATEWAY" ]; then # Шлюз уже установлен и совпадает с нужным 
         echo "$(date) [context] Current default gateway: $current_gw matches desired: $WAN_GATEWAY — no change needed" >> "$LOG"
     fi
@@ -416,6 +401,19 @@ if diff -I '<bcrypt-hash>.*</bcrypt-hash>'  -I '<authorizedkeys>.*</authorizedke
 elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, копируем его в config.xml
     cp "$backup_xml_file" "$xml_file"
     echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
+fi
+# Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
+# RC_RELOAD_IFACE=on|off (по умолчанию off)
+hash1="$(xml sel -t -c "//interfaces" "$xml_file" | xml fo -n -o | tr -d '\n' | md5)"
+cp "$xml_file" "/root/xml_file"
+cp "$backup_xml_file" "/root/backup_xml_file"
+hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | xml fo -n -o | tr -d '\n' | md5)"
+if [ "$hash1" != "$hash2" ]; then
+   { echo "$(date) [context] Interfaces section changed, need to reload interfaces set RC_RELOAD_IFACE=on"
+     echo "$(date) [context] Old interfaces config hash: $hash1"
+     echo "$(date) [context] New interfaces config hash: $hash2"
+    }>> "$LOG"
+    RC_RELOAD_IFACE="on"
 fi
 # Перезагрузка служб pfSense (если указано в контексте)
 if [ "${RC_RELOAD_ALL}" = "on" ]; then

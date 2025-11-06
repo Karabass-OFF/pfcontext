@@ -1,4 +1,5 @@
 #
+# shellcheck shell=sh disable=SC2148,SC2211,SC2035
 SHELL=/bin/sh
 PATH=/etc:/bin:/sbin:/usr/bin:/usr/sbin
 

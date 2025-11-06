@@ -13,7 +13,7 @@ if [ "$UPTIME" -lt 60 ]; then
             exit 0
         fi
     fi
-	printf "%b*** SYSTEM UPTIME IS %s seconds, STARTING CONTEXT SERVICES PLEASE WAIT 60-%s seconds ***%b\n" "$RED" "$UPTIME" "$UPTIME" "$RESET"
+	printf "%b*** SYSTEM UPTIME IS %s seconds, PLEASE WAIT 1 MINUTE ***%b\n" "$RED" "$UPTIME" "$RESET"
     $SERVICE1 onestart 
     $SERVICE2 onestart && echo "$UPTIME" > "$STATE_FILE"
 fi
