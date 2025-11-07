@@ -377,10 +377,9 @@ PHP
 #   ============================================================
 #               🧩 Подключаем плагины IPSE        
 #   ============================================================
-# shellcheck disable=SC1091
- . /etc/context.d/modules/ipsec-plugins/strat-nonblok.sh
  # shellcheck disable=SC1091
  . /etc/context.d/modules/ipsec-plugins/firewall-rules.sh
-
+# shellcheck disable=SC1091
+ . /etc/context.d/modules/ipsec-plugins/strat-nonblok.sh
 log "✅ Completed successfully"
 exit 0

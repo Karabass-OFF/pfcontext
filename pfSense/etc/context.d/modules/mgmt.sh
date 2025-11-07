@@ -11,13 +11,13 @@
 #       - lan|wan|ipsec
 #       - CIDR (10.11.11.0/24, 203.0.113.5/32)
 #       - iface:CIDR|net|any  (напр. ipsec:10.11.11.0/24, lan:net, wan:any)
-#   MGMT_SRC_DEFAULT_IF=ipsec    # если MGMT_SRC содержит «голый» CIDR без iface
+#   MGMT_SRC_DEFAULT_IF=lan    # если MGMT_SRC содержит «голый» CIDR без iface
 # -------------------------------------------------------------------
 : "${MGMT_ENABLE:=YES}"
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,80,443}"
 : "${MGMT_SRC:=lan:192.168.0.0/16}"
-: "${MGMT_SRC_DEFAULT_IF:=ipsec}"
+: "${MGMT_SRC_DEFAULT_IF:=lan}"
 
 LOG_FILE="/var/log/context.log"
 SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
@@ -150,10 +150,18 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
     \$srcSpec  = getenv('MGMT_SRC') ?: 'lan';
     \$defIf    = getenv('MGMT_SRC_DEFAULT_IF') ?: 'ipsec';
 
-    // удалить старые [MGMT]-правила
-    \$config['filter']['rule'] = array_values(array_filter(\$config['filter']['rule'] ?? [],
-      function(\$r){ return !isset(\$r['descr']) || strpos(\$r['descr'],'[MGMT]')===false; }
-    ));
+    // удалить старые [MGMT]-правила и дефолтные allow LAN/WAN
+    \$config['filter']['rule'] = array_values(array_filter(\$config['filter']['rule'] ?? [], function(\$r) use (\$mgmtIf) {
+    // если нет descr — оставляем
+    if (!isset(\$r['descr'])) return true;
+
+    \$descr = strtolower(\$r['descr']);
+    // удалить все [MGMT] и default allow на том же интерфейсе
+    if (strpos(\$descr, '[mgmt]') !== false) return false;
+    if (strpos(\$descr, 'default allow') !== false && (\$r['interface'] ?? '') === \$mgmtIf) return false;
+    if (strpos(\$descr, 'anti-lockout') !== false && (\$r['interface'] ?? '') === \$mgmtIf) return false;
+    return true;
+}));
 
     // разобрать MGMT_SRC
     \$entries   = array_filter(array_map('trim', explode(',', \$srcSpec)));
