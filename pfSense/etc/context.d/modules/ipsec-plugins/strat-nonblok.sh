@@ -71,8 +71,8 @@ done
 /usr/local/sbin/swanctl --list-sas 2>/dev/null \
   | /usr/bin/awk '{print strftime(), " [context-IPSEC][sas] ", $0}' >> "$LOG_FILE" || true
 
-/usr/bin/tail -n 200 /var/log/ipsec.log 2>/dev/null \
-  | /usr/bin/awk -v ts="$(date '+%Y-%m-%dT%H:%M:%S%z')" '{printf "%s [context-IPSEC][ipsec.log] %s\n", ts, $0}' \
-  >> "$LOG_FILE" || true
+#/usr/bin/tail -n 200 /var/log/ipsec.log 2>/dev/null \
+#  | /usr/bin/awk -v ts="$(date '+%Y-%m-%dT%H:%M:%S%z')" '{printf "%s [context-IPSEC][ipsec.log] %s\n", ts, $0}' \
+#  >> "$LOG_FILE" || true
 
 log "✅ Completed successfully (non-blocking initiate)"
