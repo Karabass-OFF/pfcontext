@@ -96,58 +96,64 @@ foreach (($config['ipsec']['phase1'] ?? []) as $p1) {
   }
 }
 
-/* --- 2) Разрешающие правила на IPsec для сетей Phase2 --- */
-foreach (($config['ipsec']['phase2'] ?? []) as $p2) {
-  $lid = $p2['localid']  ?? [];
-  $rid = $p2['remoteid'] ?? [];
-  if (($lid['type'] ?? '') !== 'network' || ($rid['type'] ?? '') !== 'network') continue;
+/* --- 2) Универсальное правило "разрешить всё" на IPsec-интерфейсе --- */
 
-  $la = trim((string)($lid['address'] ?? ''));
-  $lb = (string)($lid['netbits'] ?? '');
-  $ra = trim((string)($rid['address'] ?? ''));
-  $rb = (string)($rid['netbits'] ?? '');
-  if ($la === '' || $lb === '' || $ra === '' || $rb === '') continue;
+// IPsec в pfSense — виртуальный интерфейс enc0 (если VTI не назначен)
+$ipsec_if = array_key_exists('ipsec', $config['interfaces'] ?? []) ? 'ipsec' : 'enc0';
 
-  $descr = "[context] IPsec {$ra}/{$rb} → {$la}/{$lb}";
-  $src = [
-    'type'    => 'network',   // или 'address'
-    'network' => "{$ra}/{$rb}"
-  ];
-  $dst = [
-    'type'    => 'network',   // или 'address'
-    'network' => "{$la}/{$lb}"
+$descr_v4 = '[context] IPsec allow all traffic (IPv4)';
+$descr_v6 = '[context] IPsec allow all traffic (IPv6)';
+
+/* IPv4 */
+$idx_v4 = $find_rule($ipsec_if, $descr_v4);
+$rule_v4 = [
+  'type'        => 'pass',
+  'interface'   => $ipsec_if,
+  'ipprotocol'  => 'inet',
+  'protocol'    => 'any',
+  'source'      => ['any' => ''],
+  'destination' => ['any' => ''],
+  'descr'       => $descr_v4,
 ];
 
-  $idx = $find_rule('ipsec', $descr);
-  if ($idx !== null) {
-    $config['filter']['rule'][$idx] = array_merge($config['filter']['rule'][$idx], [
-      'type'           => 'pass',
-      'interface'      => 'ipsec',
-      'ipprotocol'     => 'inet',
-      'protocol'       => 'any',
-      'source'         => $src,
-      'destination'    => $dst,
-      'apply_to_ipsec' => 'yes',
-      'updated'        => date('c'),
-    ]);
-    unset($config['filter']['rule'][$idx]['disabled']);
-    ctx_log("Updated IPsec rule: $descr");
-  } else {
-    $config['filter']['rule'][] = [
-      'type'           => 'pass',
-      'interface'      => 'ipsec',
-      'ipprotocol'     => 'inet',
-      'protocol'       => 'any',
-      'source'         => $src,
-      'destination'    => $dst,
-      'apply_to_ipsec' => 'yes',
-      'descr'          => $descr,
-      'created'        => date('c'),
-      'updated'        => date('c'),
-    ];
-    ctx_log("Added IPsec rule: $descr");
-  }
+if ($idx_v4 !== null) {
+  $config['filter']['rule'][$idx_v4] = array_merge($config['filter']['rule'][$idx_v4], $rule_v4, [
+    'updated' => date('c'),
+  ]);
+  unset($config['filter']['rule'][$idx_v4]['disabled']);
+  ctx_log("Updated IPv4 allow-all rule on {$ipsec_if}");
+} else {
+  $rule_v4['created'] = date('c');
+  $rule_v4['updated'] = date('c');
+  $config['filter']['rule'][] = $rule_v4;
+  ctx_log("Added IPv4 allow-all rule on {$ipsec_if}");
 }
+
+/* IPv6 */
+$idx_v6 = $find_rule($ipsec_if, $descr_v6);
+$rule_v6 = [
+  'type'        => 'pass',
+  'interface'   => $ipsec_if,
+  'ipprotocol'  => 'inet6',
+  'protocol'    => 'any',
+  'source'      => ['any' => ''],
+  'destination' => ['any' => ''],
+  'descr'       => $descr_v6,
+];
+
+if ($idx_v6 !== null) {
+  $config['filter']['rule'][$idx_v6] = array_merge($config['filter']['rule'][$idx_v6], $rule_v6, [
+    'updated' => date('c'),
+  ]);
+  unset($config['filter']['rule'][$idx_v6]['disabled']);
+  ctx_log("Updated IPv6 allow-all rule on {$ipsec_if}");
+} else {
+  $rule_v6['created'] = date('c');
+  $rule_v6['updated'] = date('c');
+  $config['filter']['rule'][] = $rule_v6;
+  ctx_log("Added IPv6 allow-all rule on {$ipsec_if}");
+}
+
 
 /* --- 3) Сохранить и применить --- */
 write_config('[context-IPSEC] Applied firewall rules (no-alias)', false);

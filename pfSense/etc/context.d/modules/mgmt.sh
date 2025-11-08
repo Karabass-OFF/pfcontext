@@ -10,17 +10,16 @@
 #   MGMT_SRC=...                 # ОТКУДА пускать. Форматы:
 #       - lan|wan|ipsec
 #       - CIDR (10.11.11.0/24, 203.0.113.5/32)
-#       - iface:CIDR|net|any  (напр. ipsec:10.11.11.0/24, lan:net, wan:any)
+#       - iface:CIDR|net|any  (напр. wan:10.11.11.0/24, lan:net, wan:any)
 #   MGMT_SRC_DEFAULT_IF=lan    # если MGMT_SRC содержит «голый» CIDR без iface
 # -------------------------------------------------------------------
 : "${MGMT_ENABLE:=YES}"
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,80,443}"
-: "${MGMT_SRC:=lan:192.168.0.0/16}"
+: "${MGMT_SRC:=${MGMT_IF}:net, ${MGMT_IF}:192.165.12.10/32,${MGMT_IF}:10.10.10.0/21}"
 : "${MGMT_SRC_DEFAULT_IF:=lan}"
 
 LOG_FILE="/var/log/context.log"
-SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
 
 export MGMT_ENABLE MGMT_IF MGMT_PORT MGMT_SRC MGMT_SRC_DEFAULT_IF
 
@@ -34,7 +33,7 @@ apply_php() {
   done
 }
 
-log "Starting Management Interface Context (version=${SCRIPT_VERSION}, IF=${MGMT_IF}, ENABLE=${MGMT_ENABLE}, PORT=${MGMT_PORT}, SRC=${MGMT_SRC}, path=$(realpath "$0"))"
+log "Starting Management Interface Context, IF=${MGMT_IF}, ENABLE=${MGMT_ENABLE}, PORT=${MGMT_PORT}, SRC=${MGMT_SRC}, path=$(realpath "$0"))"
 
 CONF_PATH="$(/usr/local/bin/php -r "require_once(\"config.inc\"); global \$g; echo (\$g[\"conf_path\"] ?? \"/conf\");" 2>/dev/null)"
 [ -z "$CONF_PATH" ] && CONF_PATH="/conf"

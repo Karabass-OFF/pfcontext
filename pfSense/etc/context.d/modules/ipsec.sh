@@ -6,7 +6,7 @@ set -eu
 # ============================================================
 
 : "${CONTEXT_IPSEC_ENABLE:=YES}"
-: "${CONTEXT_IPSEC_TUNNELS:=2}"
+: "${CONTEXT_IPSEC_TUNNELS:=1}"
 
 # --- Phase1 (IKE) ---
 : "${IPSEC_P1_IKE:=ikev2}"
@@ -56,11 +56,11 @@ done
 : "${CONTEXT_IPSEC_1_LOCAL_NET:=192.168.201.0/24}"
 : "${CONTEXT_IPSEC_1_REMOTE_NET:=10.11.11.0/24}"
 
-: "${CONTEXT_IPSEC_2_REMOTE:=203.0.113.20}"
-: "${CONTEXT_IPSEC_2_PSK:=SecretB}"
-: "${CONTEXT_IPSEC_2_LOCALID:=wan}"
-: "${CONTEXT_IPSEC_2_LOCAL_NET:=10.10.0.0/24}"
-: "${CONTEXT_IPSEC_2_REMOTE_NET:=10.30.0.0/24}"
+#: "${CONTEXT_IPSEC_2_REMOTE:=203.0.113.20}"
+#: "${CONTEXT_IPSEC_2_PSK:=SecretB}"
+#: "${CONTEXT_IPSEC_2_LOCALID:=wan}"
+#: "${CONTEXT_IPSEC_2_LOCAL_NET:=10.10.0.0/24}"
+#: "${CONTEXT_IPSEC_2_REMOTE_NET:=10.30.0.0/24}"
 #
 #: "${CONTEXT_IPSEC_3_REMOTE:=203.0.113.30}"
 #: "${CONTEXT_IPSEC_3_PSK:=SecretC}"
@@ -69,7 +69,6 @@ done
 #: "${CONTEXT_IPSEC_3_REMOTE_NET:=10.40.0.0/24}"
 
 LOG_FILE="/var/log/context.log"
-SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo 'unknown')"
 SCRIPT_PATH="$(realpath "$0" 2>/dev/null || echo "$0")"
 
 log() {
@@ -81,7 +80,7 @@ if [ "${CONTEXT_IPSEC_ENABLE}" != "YES" ]; then
   exit 0
 fi
 
-log "=== Starting IPSEC Context (version=${SCRIPT_VERSION}, path=${SCRIPT_PATH}) ==="
+log "=== Starting IPSEC Context, path=${SCRIPT_PATH}) ==="
 
 # shellcheck shell=sh disable=SC3043,SC1083,SC2086
 get_var() {

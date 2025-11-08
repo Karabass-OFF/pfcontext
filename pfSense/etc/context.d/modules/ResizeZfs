@@ -2,11 +2,9 @@
 # ResizeFs — универсальный ресайз диска для pfSense (UFS/ZFS)
 # Теперь корректно определяет последний freebsd-* раздел (корень)
 
-LOG="/var/log/context-resizefs.log"
-SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
-
+LOG="/var/log/context.log"
 {
-  echo "$(date) [context] === START ResizeFs $SCRIPT_VERSION ==="
+  echo "$(date) [context] === START ResizeFs  ==="
 
   DISK=$(gpart show | awk '/GPT/ {print $4; exit}')
   [ -z "$DISK" ] && { echo "$(date) [context] Не удалось определить диск — выходим"; exit 1; }

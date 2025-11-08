@@ -11,7 +11,6 @@ CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
 backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
-SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
 
 : "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
 : "${PASSWORD_ROOT:=}" # root password override variable
@@ -24,7 +23,7 @@ SCRIPT_VERSION="$(cat /etc/context.d/VERSION 2>/dev/null || echo "unknown")"
 : "${MGMT_ENABLE:=}" # defined in mgmt.sh
 : "${PFCTL:=}" # defined in pfctl_off
 
-echo "$(date) [context] === START ContextOnly $SCRIPT_VERSION ===" >> "$LOG"
+echo "$(date) [context] === START ContextOnly ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
 mkdir -p "$CONTEXT_MOUNT"
 if ! mount | grep -q "on $CONTEXT_MOUNT "; then
@@ -518,6 +517,8 @@ if [ -x "$MGMT_MODULE" ]; then
         echo "$(date) [context-MGMT:ContextOnly] MGMT module failed (exit $status)" >> "$LOG"
     fi
 fi
+
+
 if [ -f "$PID" ]; then
     {
         echo "$(date) [context] Файл найден: $PID = cat $PID" 
