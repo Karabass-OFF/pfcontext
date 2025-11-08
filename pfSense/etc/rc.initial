@@ -2,8 +2,6 @@
 RED="\033[1;31m"
 GREEN="\033[1;32m"
 RESET="\033[0m"
-SERVICE1="/etc/context.d/modules/ResizeZfs"
-SERVICE2="/etc/context.d/ContextOnly"
 STATE_FILE="/var/run/contextallrun_started"
 UPTIME=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || sysctl -n kern.boottime | awk -F'[ ,}]+' '{print int((systime()-$4))}')
 if [ "$UPTIME" -lt 60 ]; then
@@ -14,8 +12,8 @@ if [ "$UPTIME" -lt 60 ]; then
         fi
     fi
 	printf "%b*** SYSTEM UPTIME IS %s seconds, PLEASE WAIT 1 MINUTE ***%b\n" "$RED" "$UPTIME" "$RESET"
-    $SERVICE1 onestart 
-    $SERVICE2 onestart && echo "$UPTIME" > "$STATE_FILE"
+    /etc/context.d/modules/ResizeZfs
+    /etc/context.d/ContextOnly && echo "$UPTIME" > "$STATE_FILE"
 fi
 if [ "$UPTIME" -ge 60 ]; then
 	printf "%b*** SYSTEM ALREADY STARTED ***%b\n" "$GREEN" "$RESET"

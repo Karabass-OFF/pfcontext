@@ -16,7 +16,7 @@
 : "${MGMT_ENABLE:=YES}"
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,80,443}"
-: "${MGMT_SRC:=${MGMT_IF}:net, ${MGMT_IF}:192.165.12.10/32,${MGMT_IF}:10.10.10.0/21}"
+: "${MGMT_SRC:=${MGMT_IF}:net}"
 : "${MGMT_SRC_DEFAULT_IF:=lan}"
 
 LOG_FILE="/var/log/context.log"
