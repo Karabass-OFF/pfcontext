@@ -373,19 +373,18 @@ if [ -n "$WAN_GATEWAY" ]; then
     fi
 fi
 
-# --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
-# Отключение/Включение pfSense firewall (pfctl)
+# --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ НЕ МЕНЯТ ПОРЯДОК ВЫПОЛНЕНИЯ ----
+# 1. Отключение/Включение pfSense firewall (pfctl)
 # shellcheck disable=SC1091
 . /etc/context.d/modules/pfctl.sh
-
-# Синхронизация config.xml (если есть изменения)
+# 2. Синхронизация config.xml (если есть изменения)
 # shellcheck disable=SC1091
 . /etc/context.d/modules/sync-conf.sh
-export RC_RELOAD_IFACE
-# Перезагрузка интерфейсов (если требуется)
+  export RC_RELOAD_IFACE
+# 3. Перезагрузка интерфейсов (если требуется)
 # shellcheck disable=SC1091
 . /etc/context.d/modules/reload-iface.sh
-# SSH модуль для добавления SSH-ключа
+# 4. SSH модуль для добавления SSH-ключа
 # shellcheck disable=SC1091
 [ -n "${SSH_PUBLIC_KEY:-}" ] && . /etc/context.d/modules/addsshkey.sh
 

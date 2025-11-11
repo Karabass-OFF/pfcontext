@@ -1,3 +1,4 @@
+# shellcheck disable=SC1091,SC2148,SC2154
 # Перезагрузка служб pfSense (если указано в контексте)
 if [ "${RC_RELOAD_ALL}" = "YES" ]; then
     # Перезагружаем службы pfSense
