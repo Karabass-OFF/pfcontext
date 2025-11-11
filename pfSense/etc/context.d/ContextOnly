@@ -24,6 +24,7 @@ cp "$xml_file"  "$backup_xml_file" # Создаем резервную копи�
 : "${MGMT_ENABLE:=NO}" # defined in mgmt.sh
 : "${PFCTL:=NO}" # defined in pfctl_off
 : "${FIRST_BOOT:=YES}" # defined in firstboot flag file
+: "${CONTEXT_IPSEC_ENABLE:=NO}" # defined in context.sh
 
 echo "$(date) [context] === START ContextOnly ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
@@ -390,8 +391,8 @@ fi
 
 # ПЕРВЫЙ ЗАПУСК - ВЫПОЛНЯЕМ ПРИ ПЕРВОМ ЗАПУСКЕ ИЛИ FIRST_BOOT=NO
 FIRSTBOOT_FLAG="/etc/context.d/firstboot"
-if [ ! -f "$FIRSTBOOT_FLAG" ] || [ "${FIRST_BOOT}" = "NO" ]; then
-    touch /etc/context.d/firstboot
+if [ ! -f "$FIRSTBOOT_FLAG" ] || [ "${FIRST_BOOT}" = "YES" ]; then
+    #touch /etc/context.d/firstboot
 
     # BGP-модуль 
     # shellcheck disable=SC1091
@@ -400,10 +401,10 @@ if [ ! -f "$FIRSTBOOT_FLAG" ] || [ "${FIRST_BOOT}" = "NO" ]; then
     # Модуль управления management-интерфейсом
     # shellcheck disable=SC1091
     [ "${MGMT_ENABLE}" = "YES" ] && . /etc/context.d/modules/mgmt.sh 
-
+echo "CONTEXT_IPSEC_ENABLE=$CONTEXT_IPSEC_ENABLE"
     # Модуль настройки IPsec
     # shellcheck disable=SC1091
-    [ "${IPSEC_ENABLE:=NO}" = "YES" ] && . /etc/context.d/modules/ipsec.sh 
+    [ "${CONTEXT_IPSEC_ENABLE}" = "YES" ] && . /etc/context.d/modules/ipsec.sh 
     
     echo "$(date) [context] First boot operations completed, created /etc/context.d/firstboot" >> "$LOG"
 else

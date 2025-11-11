@@ -81,7 +81,9 @@ if [ "${CONTEXT_IPSEC_ENABLE}" != "YES" ]; then
 fi
 
 log "=== Starting IPSEC Context, path=${SCRIPT_PATH}) ==="
-
+ for v in CONTEXT_IPSEC_1_REMOTE CONTEXT_IPSEC_1_PSK CONTEXT_IPSEC_1_LOCALID CONTEXT_IPSEC_1_LOCAL_NET CONTEXT_IPSEC_1_REMOTE_NET; do
+  eval "[ -z \"\${$v-}\" ]" && { log "  ERROR: required variable $v is not set — aborting"; return 0; }
+done
 # shellcheck shell=sh disable=SC3043,SC1083,SC2086
 get_var() {
   local idx="$1" key="$2" var
@@ -381,4 +383,4 @@ PHP
 # shellcheck disable=SC1091
  . /etc/context.d/modules/ipsec-plugins/strat-nonblok.sh
 log "✅ Completed successfully"
-exit 0
+return 0

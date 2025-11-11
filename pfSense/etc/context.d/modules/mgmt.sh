@@ -14,10 +14,10 @@
 #   MGMT_SRC_DEFAULT_IF=lan    # если MGMT_SRC содержит «голый» CIDR без iface
 # -------------------------------------------------------------------
 : "${MGMT_ENABLE:=YES}"
-: "${MGMT_IF:=lan}"
+: "${MGMT_IF:=wan}"
 : "${MGMT_PORT:=22,80,443}"
-: "${MGMT_SRC:=${MGMT_IF}:net}"
-: "${MGMT_SRC_DEFAULT_IF:=lan}"
+: "${MGMT_SRC:=${MGMT_IF}:any}"
+: "${MGMT_SRC_DEFAULT_IF:=${MGMT_IF}}"
 
 LOG_FILE="/var/log/context.log"
 

@@ -9,7 +9,6 @@ if [ "${RC_RELOAD_ALL}" = "YES" ]; then
     } >>"$LOG" 2>&1
 fi
 echo "$(date) [context:reload-iface.sh] RC_RELOAD_IFACE=${RC_RELOAD_IFACE}" >> "$LOG"
-echo "$(date) [context:reload-iface.sh] RC_RELOAD_IFACE=${RC_RELOAD_IFACE}" 
 # Перезагрузка интерфейсов pfSense (если указано в контексте)
 if [ "${RC_RELOAD_IFACE}" = "YES" ]; then
     echo "$(date) [context:reload-iface.sh]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
