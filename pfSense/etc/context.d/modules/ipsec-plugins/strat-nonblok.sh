@@ -75,4 +75,14 @@ done
 #  | /usr/bin/awk -v ts="$(date '+%Y-%m-%dT%H:%M:%S%z')" '{printf "%s [context-IPSEC][ipsec.log] %s\n", ts, $0}' \
 #  >> "$LOG_FILE" || true
 
+# 6.1) Проверка: если CHILD SA нет, инициируем вручную (аварийный пинок)
+if ! /usr/local/sbin/swanctl --list-sas 2>/dev/null | grep -q 'INSTALLED'; then
+  log "⚠️  No CHILD_SA detected after initial wait — forcing manual initiation"
+  for c in $names; do
+    [ "$c" = "bypass" ] && continue
+    nohup /usr/local/sbin/swanctl --initiate --child "$c" >/dev/null 2>&1 &
+    log "  🔁 forced reinitiate CHILD $c"
+  done
+  sleep 3
+fi
 log "✅ Completed successfully (non-blocking initiate)"

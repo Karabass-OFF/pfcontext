@@ -10,7 +10,8 @@ PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
-backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
+backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y-%m-%d_%H-%M-%S)"
+cp "$xml_file"  "$backup_xml_file" # Создаем резервную копию config.xml
 
 : "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
 : "${PASSWORD_ROOT:=}" # root password override variable
@@ -30,14 +31,14 @@ mkdir -p "$CONTEXT_MOUNT"
 if ! mount | grep -q "on $CONTEXT_MOUNT "; then
     mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1
 fi
+
 # Проверяем наличие файла context.sh на CD-ROM
 if [ -f "$CONTEXT_FILE" ]; then
     echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
      set -a
     # shellcheck source=/dev/null
     . "$CONTEXT_FILE"
-     set +a
-    cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
+    set +a
     get_ctx_var() {
         idx="$1"
         suffix="$2"
@@ -52,6 +53,7 @@ else
     echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
     exit 0
 fi
+
 # Отмонтировать диск после выполнения всех операций
 if mount | grep -q "on $CONTEXT_MOUNT "; then
     umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
@@ -268,6 +270,7 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
             fi
         done
     done
+    RC_RELOAD_IFACE="YES" # Требуется рестарт интерфейсов
 fi
 echo "$(date) [context] Total interfaces configured: $added_if_count" >> "$LOG"
 # --- /СЕТИ ---------------------------------------------------------------
@@ -327,7 +330,8 @@ for ifeth in $(ifconfig -l); do
     if ifconfig "$ifeth" | grep -q 'description: WAN' ; then
         echo "$(date) [context] Found WAN interface $ifeth (MAC=$eth_mac)" >> "$LOG"
         eth=$(set | grep "ETH" | grep -i "$eth_mac" | cut -d "_" -f 1 )
-        WAN_GATEWAY=$(set | grep "$eth""_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
+        #WAN_GATEWAY=$(set | grep "$eth""_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
+        WAN_GATEWAY=$(set | grep -E "^${eth}_GATEWAY=" | head -n1 | cut -d "=" -f 2 | tr -d '"[:space:]')
         echo "$(date) [context] Detected WAN_GATEWAY=$WAN_GATEWAY from $eth" >> "$LOG"
     fi
 done
@@ -368,6 +372,7 @@ if [ -n "$WAN_GATEWAY" ]; then
         echo "$(date) [context] Current default gateway: $current_gw matches desired: $WAN_GATEWAY — no change needed" >> "$LOG"
     fi
 fi
+
 # --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
 # Отключение/Включение pfSense firewall (pfctl)
 # shellcheck disable=SC1091
@@ -376,7 +381,10 @@ fi
 # Синхронизация config.xml (если есть изменения)
 # shellcheck disable=SC1091
 . /etc/context.d/modules/sync-conf.sh
-
+export RC_RELOAD_IFACE
+# Перезагрузка интерфейсов (если требуется)
+# shellcheck disable=SC1091
+. /etc/context.d/modules/reload-iface.sh
 # SSH модуль для добавления SSH-ключа
 # shellcheck disable=SC1091
 [ -n "${SSH_PUBLIC_KEY:-}" ] && . /etc/context.d/modules/addsshkey.sh
@@ -407,7 +415,7 @@ fi
 if [ -f "$PID" ]; then
     {
         echo "$(date) [context] Файл найден: $PID = cat $PID" 
-        rm -f "$(date) [context] $PID" && echo "Файл $PID удалён."
+        rm -f "$PID" && echo "Файл $PID удалён."
     } >> "$LOG"
 fi
 echo "$(date) [context] FINISH" >> "$LOG"

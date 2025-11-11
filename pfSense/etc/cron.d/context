@@ -5,3 +5,4 @@ PATH=/etc:/bin:/sbin:/usr/bin:/usr/sbin
 
 # See crontab(5) for field format.
 *	*	*	*	*	root	/etc/context.d/modules/pfctl_off
+@reboot root /bin/sh -c "sleep 180; [ -f /etc/context.d/firstboot ] || touch /etc/context.d/firstboot ; echo $(date) [context-cron] Reboot detected, firstboot flag ensured' >> /var/log/context.log"
