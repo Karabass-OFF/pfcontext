@@ -3,7 +3,6 @@
 # POSIX sh; persists config via /usr/local/bin/php (не через pfSsh.php playback)
 
 set -eu
-SCRIPT_VERSION="BGP v0.3.1 2025-10-22"
 #LOG="/dev/null"  # set to /var/log/context-bgp.log for debug
 LOGBGP="/var/log/context.log"
 log() {
@@ -11,13 +10,12 @@ log() {
   printf "%s [context-bgp] BGP: %s\n" "$ts" "$*" >> "$LOGBGP" 2>/dev/null
 }
 
-log "Starting BGP Context Module (version=${SCRIPT_VERSION}, path=$(realpath "$0"))"
+log "Starting BGP Context Module, path=$(realpath "$0"))"
 # --- 0) Preconditions --------------------------------------------------------
 if ! pkg info -q -e frr9 && ! pkg info -q -e pfSense-pkg-frr; then
   log "FRR package not installed, skipping"
   return 0 
 fi
-
 
 PHPBIN="/usr/local/bin/php"
 [ -x "$PHPBIN" ] || { log "php CLI not found at $PHPBIN"; exit 1; }

@@ -1,7 +1,5 @@
 #!/bin/sh
-#
 # ContextOnly script for pfSense
-#
 #set -eu
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
@@ -12,32 +10,36 @@ PID="/etc/context.d/net.pid"
 CONTEXT_DEV="/dev/cd0"
 CONTEXT_FILE="$CONTEXT_MOUNT/context.sh"
 xml_file="/cf/conf/config.xml"
-backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y.%m.%d.%H:%M:%S)"
-SCRIPT_VERSION="v0.3.5"
+backup_xml_file="/cf/conf/backup/config.xml.$(date +%Y-%m-%d_%H-%M-%S)"
+cp "$xml_file"  "$backup_xml_file" # Создаем резервную копию config.xml
 
 : "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
 : "${PASSWORD_ROOT:=}" # root password override variable
 : "${BGP_ENABLE:=NO}" # по умолчанию BGP выключен
-: "${BLOCK_PRIVATE_NETWORKS:=off}" # по умолчанию off, не блокировать private-сети
-: "${BLOCK_BOGON_NETWORKS:=off}" # по умолчанию off, не блокировать bogon-сети
-: "${RC_RELOAD_ALL:=off}" # по умолчанию off, полный рестарт служб
-: "${RC_RELOAD_IFACE:=off}" # по умолчанию off, рестарт интерфейсов
+: "${BLOCK_PRIVATE_NETWORKS:=NO}" # по умолчанию NO, не блокировать private-сети
+: "${BLOCK_BOGON_NETWORKS:=NO}" # по умолчанию NO, не блокировать bogon-сети
+: "${RC_RELOAD_ALL:=NO}" # по умолчанию NO, полный рестарт служб
+: "${RC_RELOAD_IFACE:=NO}" # по умолчанию NO, рестарт интерфейсов
 : "${SSH_PUBLIC_KEY:=}" # public key for root access
-: "${MGMT_ENABLE:=}" # defined in mgmt.sh
-: "${PFCTL:=}" # defined in pfctl_off
+: "${MGMT_ENABLE:=NO}" # defined in mgmt.sh
+: "${PFCTL:=NO}" # defined in pfctl_off
+: "${FIRST_BOOT:=YES}" # defined in firstboot flag file
+: "${CONTEXT_IPSEC_ENABLE:=NO}" # defined in context.sh
 
-echo "$(date) [context] === START ContextOnly $SCRIPT_VERSION ===" >> "$LOG"
+echo "$(date) [context] === START ContextOnly ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
 mkdir -p "$CONTEXT_MOUNT"
 if ! mount | grep -q "on $CONTEXT_MOUNT "; then
     mount -t cd9660 "$CONTEXT_DEV" "$CONTEXT_MOUNT" >> "$LOG" 2>&1
 fi
+
 # Проверяем наличие файла context.sh на CD-ROM
 if [ -f "$CONTEXT_FILE" ]; then
     echo "$(date) [context] Found $CONTEXT_FILE — sourcing" >> "$LOG"
+     set -a
     # shellcheck source=/dev/null
     . "$CONTEXT_FILE"
-    cp "$xml_file" "$backup_xml_file" # Создаем резервную копию config.xml
+    set +a
     get_ctx_var() {
         idx="$1"
         suffix="$2"
@@ -48,11 +50,16 @@ if [ -f "$CONTEXT_FILE" ]; then
         fi
         printf '%s' "${val:-}"
     }
-    # Проверяем текущий шлюз по умолчанию и меняем его, только если он не совпадает с нужным и выключен BGP
-    current_gw=$(netstat -rn | awk '/^0.0.0.0/ {print $2; exit}')    
 else
     echo "$(date) [context] $CONTEXT_FILE not found, exiting" >> "$LOG"
     exit 0
+fi
+
+# Отмонтировать диск после выполнения всех операций
+if mount | grep -q "on $CONTEXT_MOUNT "; then
+    umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
+else
+    echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
 fi
 # --- СЕТИ / ИНТЕРФЕЙСЫ ---------------------------------------------------
 iface_type_changed=false
@@ -264,6 +271,7 @@ if [ -f "$PID" ] || [ "$iface_type_changed" = "true" ]; then
             fi
         done
     done
+    RC_RELOAD_IFACE="YES" # Требуется рестарт интерфейсов
 fi
 echo "$(date) [context] Total interfaces configured: $added_if_count" >> "$LOG"
 # --- /СЕТИ ---------------------------------------------------------------
@@ -316,17 +324,6 @@ else
         echo "$(date) [context] ERROR: failed to change admin password via ChangePassTool" >> "$LOG"
     fi
 fi
-# Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
-# RC_RELOAD_IFACE=on|off (по умолчанию off)
-hash1="$(xml sel -t -c "//interfaces" "$xml_file" | md5)"
-hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | md5)"
-if [ "$hash1" != "$hash2" ]; then
-   { echo "$(date) [context] Interfaces section changed, need to reload interfaces" 
-     echo "$(date) [context] Old hash: $hash1" 
-     echo "$(date) [context] New hash: $hash2" 
-    }>> "$LOG"
-    RC_RELOAD_IFACE="on"
-fi
 # получаем шлюз WAN из контекстных переменных по MAC адресу интерфейса WAN 
 for ifeth in $(ifconfig -l); do
     eth_mac=$(ifconfig "$ifeth" | awk '/ether/ {print $2}')
@@ -334,14 +331,16 @@ for ifeth in $(ifconfig -l); do
     if ifconfig "$ifeth" | grep -q 'description: WAN' ; then
         echo "$(date) [context] Found WAN interface $ifeth (MAC=$eth_mac)" >> "$LOG"
         eth=$(set | grep "ETH" | grep -i "$eth_mac" | cut -d "_" -f 1 )
-        WAN_GATEWAY=$(set | grep "$eth""_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
+        #WAN_GATEWAY=$(set | grep "$eth""_GATEWAY=" | cut -d "=" -f 2 | tr -d '"')
+        WAN_GATEWAY=$(set | grep -E "^${eth}_GATEWAY=" | head -n1 | cut -d "=" -f 2 | tr -d '"[:space:]')
         echo "$(date) [context] Detected WAN_GATEWAY=$WAN_GATEWAY from $eth" >> "$LOG"
     fi
 done
-# Настраиваем шлюз по умолчанию для WAN ecли он указан и отличается от текущего       
+# Проверяем текущий шлюз по умолчанию 
+current_gw=$(netstat -rn | awk '/^0.0.0.0/ {print $2; exit}') 
 if [ -n "$WAN_GATEWAY" ]; then
     network="wan"
-    sleep 0.1
+    sleep 0.2
     if [ "$current_gw" != "$WAN_GATEWAY" ]; then # Меняем шлюз, только если он отличается от текущего 
         { echo "$(date) [context] Current default gateway: ${current_gw:-"(none)"} differs from desired: $WAN_GATEWAY — updating route (BGP off)" 
           route delete default 
@@ -368,158 +367,55 @@ if [ -n "$WAN_GATEWAY" ]; then
             -u "//gateways/defaultgw4" -v "WANGW" \
             "$backup_xml_file"
         # Привязываем шлюз WANGW к интерфейсу WAN, если его нет
-        if xml sel -t -v "//interfaces/$network/gateway" "$backup_xml_file" >/dev/null 2>&1; then
-            xml ed -L -u "//interfaces/$network/gateway" -v "WANGW" "$backup_xml_file"
-        else
             xml ed -L -s "//interfaces/$network" -t elem -n "gateway" -v "WANGW" "$backup_xml_file"
-        fi 
+            echo "$(date) [context] Added gateway WANGW to $network" >> "$LOG"
     elif [ "$current_gw" = "$WAN_GATEWAY" ]; then # Шлюз уже установлен и совпадает с нужным 
         echo "$(date) [context] Current default gateway: $current_gw matches desired: $WAN_GATEWAY — no change needed" >> "$LOG"
     fi
 fi
-# Если BGP включен, удаляем маршрут по умолчанию, чтобы BGP управлял маршрутом
-# BGP_ENABLE=YES|NO (по умолчанию NO)
-if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
-    echo "$(date) [context] BGP is enabled, removing default route: $WAN_GATEWAY because BGP will manage it" >> "$LOG"
-    route delete default >/dev/null 2>&1
-    # Удаляем старый шлюз из config.xml, если он есть
-    xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
-    xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
-    xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
-fi
-# Отключаем/Включаем private networks для WAN
-if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "on" ]; then
-     xml ed -L \
-        -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
-        "$backup_xml_file"
-    echo "$(date) [context] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
-else
-    xml ed -L \
-        -d "//interfaces/$network/blockpriv" \
-        "$backup_xml_file"
-    echo "$(date) [context] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
-fi
-# Отключаем/Включаем bogon networks для WAN
-if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "on" ]; then
-    xml ed -L \
-        -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
-        "$backup_xml_file"
-    echo "$(date) [context-network] BLOCK_BOGON_NETWORKS" >> "$LOG"
-else
-    xml ed -L \
-        -d "//interfaces/$network/blockbogons" \
-        "$backup_xml_file"
-    echo "$(date) [context] No BLOCK_BOGON_NETWORKS" >> "$LOG"
-fi
-# Синхронизация config.xml (если есть изменения)
-if diff -I '<bcrypt-hash>.*</bcrypt-hash>'  -I '<authorizedkeys>.*</authorizedkeys>' -q "$xml_file" "$backup_xml_file" >/dev/null; then
-    rm -f "$backup_xml_file"
-    echo "$(date) [context] No changes in config.xml, backup_xml_file removed" >> "$LOG"
-elif [ -s "$backup_xml_file" ]; then # Если файл не пустой, копируем его в config.xml
-    cp "$backup_xml_file" "$xml_file"
-    echo "$(date) [context] config.xml updated, backup_xml_file saved to $backup_xml_file" >> "$LOG"
-fi
-# Перезагрузка служб pfSense (если указано в контексте)
-if [ "${RC_RELOAD_ALL}" = "on" ]; then
-    # Перезагружаем службы pfSense
-   {    /etc/rc.reload_all start
-        echo "$(date) [context] pfSense services reloaded"
-        pfSsh.php playback restartallwan
-        echo "$(date) [context] pfSense services restarted"
-    } >>"$LOG" 2>&1
-fi
-# Перезагрузка интерфейсов pfSense (если указано в контексте)
-if [ "${RC_RELOAD_IFACE}" = "on" ]; then
-    echo "$(date) [context]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
-    # Перезагружаем интерфейсы pfSense
-    {   pfSsh.php playback restartallwan
-        echo "$(date) [context] pfSense services restarted"
-    } >>"$LOG" 2>&1
-fi
-# --- FIREWALL -------------------------------------------------------------
-# отключение/включение pfSense firewall (pfctl) 
-echo "$(date) [context] pfSense firewall switch = ${PFCTL}" >> "$LOG"
-if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указана
-    # Приводим значение к нижнему регистру для удобства сравнения   
-    _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
-    case "$_lc_pfctl" in
-        no|off|0|false|disabled)
-            {
-                if pfctl -s info 2>/dev/null | grep -qi 'Status: Enabled'; then
-                    pfctl -d
-                    echo "$(date) [context] pfSense firewall disabled"
-                else
-                    echo "$(date) [context] pfSense firewall already disabled (pf not enabled)"
-                fi
-                echo "$$" > /var/run/pfctlcontext.pid
-                echo "$(date) [context] Created pid file: /var/run/pfctlcontext.pid"
-            } >> "$LOG" 2>&1
-            ;;
-        yes|on|1|true|enabled)
-            if pfctl -s info | grep -qi 'Status: Disabled'; then
-                {
-                    echo "$(date) [context] pfSense firewall was disabled, enabling now '${PFCTL}'"
-                    rm -rf /var/run/pfctlcontext.pid
-                    echo "$(date) [context] Removed pid file: /var/run/pfctlcontext.pid"
-                    pfctl -e
-                    echo "$(date) [context] pfSense firewall enabled"
-                } >> "$LOG" 2>&1
-            fi
-            ;;
-        *)
-            echo "$(date) [context] pfSense firewall state unchanged (PFCTL=$_lc_pfctl)" >> "$LOG"
-            ;;
-    esac
-fi
-# Отмонтировать диск после выполнения всех операций
-if mount | grep -q "on $CONTEXT_MOUNT "; then
-    umount "$CONTEXT_MOUNT" && echo "$(date) [context] Unmounted $CONTEXT_MOUNT" >> "$LOG"
-else
-    echo "$(date) [context] $CONTEXT_MOUNT already unmounted" >> "$LOG"
-fi
-# --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ ------------------------------------------------
-# BGP-модуль 
-if [ -x /etc/context.d/modules/bgp ]; then
-    echo "$(date) [context] Running BGP module /etc/context.d/modules/bgp" >> "$LOG"
-     # shellcheck disable=SC1091
+
+# --- ДОПОЛНИТЕЛЬНЫЕ МОДУЛИ НЕ МЕНЯТ ПОРЯДОК ВЫПОЛНЕНИЯ ----
+# 1. Отключение/Включение pfSense firewall (pfctl)
+# shellcheck disable=SC1091
+. /etc/context.d/modules/pfctl.sh
+# 2. Синхронизация config.xml (если есть изменения)
+# shellcheck disable=SC1091
+. /etc/context.d/modules/sync-conf.sh
+  export RC_RELOAD_IFACE
+# 3. Перезагрузка интерфейсов (если требуется)
+# shellcheck disable=SC1091
+. /etc/context.d/modules/reload-iface.sh
+# 4. SSH модуль для добавления SSH-ключа
+# shellcheck disable=SC1091
+[ -n "${SSH_PUBLIC_KEY:-}" ] && . /etc/context.d/modules/addsshkey.sh
+
+# ПЕРВЫЙ ЗАПУСК - ВЫПОЛНЯЕМ ПРИ ПЕРВОМ ЗАПУСКЕ ИЛИ FIRST_BOOT=NO
+FIRSTBOOT_FLAG="/etc/context.d/firstboot"
+if [ ! -f "$FIRSTBOOT_FLAG" ] || [ "${FIRST_BOOT}" = "YES" ]; then
+    #touch /etc/context.d/firstboot
+
+    # BGP-модуль 
+    # shellcheck disable=SC1091
     . /etc/context.d/modules/bgp
-    echo "$(date) [context] BGP module (return $?)" >> "$LOG"
+
+    # Модуль управления management-интерфейсом
+    # shellcheck disable=SC1091
+    [ "${MGMT_ENABLE}" = "YES" ] && . /etc/context.d/modules/mgmt.sh 
+echo "CONTEXT_IPSEC_ENABLE=$CONTEXT_IPSEC_ENABLE"
+    # Модуль настройки IPsec
+    # shellcheck disable=SC1091
+    [ "${CONTEXT_IPSEC_ENABLE}" = "YES" ] && . /etc/context.d/modules/ipsec.sh 
+    
+    echo "$(date) [context] First boot operations completed, created /etc/context.d/firstboot" >> "$LOG"
+else
+    echo "$(date) [context] Not first boot, skipping runing modules: bgp, mgmt, ipsec" >> "$LOG"
 fi
 
-# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
-if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
-    mkdir -p /root/.ssh
-    if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
-        # кодируем ключ в base64 (без переносов строк)
-        # pfSense stores SSH authorized keys in base64 format inside <authorizedkeys>
-        # This ensures compatibility with pfSense GUI and PHP auth subsystem.
-        ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
-        if xml sel -t -v "//user[name='admin']/authorizedkeys" "$xml_file" >/dev/null 2>&1; then
-            xml ed -L -u "//user[name='admin']/authorizedkeys" -v "$ENC_KEY" "$xml_file"
-        else
-            xml ed -L -s "//user[name='admin']" -t elem -n "authorizedkeys" -v "$ENC_KEY" "$xml_file"
-        fi
-        echo "$(date) [context] SSH public key updated in config.xml" >> "$LOG"
-        echo "$SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
-        chmod 600 /root/.ssh/authorized_keys
-        chmod 700 /root/.ssh
-        echo "$(date) [context] SSH public key updated" >> "$LOG"
-        #RC_RELOAD_ALL="on" && echo "$(date) [context] RC_RELOAD_ALL set to on due to SSH key change" >> "$LOG"
-    fi
+# Удаляем PID-файл после успешного выполнения операций 
+if [ -f "$PID" ]; then
+    {
+        echo "$(date) [context] Файл найден: $PID = cat $PID" 
+        rm -f "$PID" && echo "Файл $PID удалён."
+    } >> "$LOG"
 fi
-# Модуль управления management-интерфейсом
-MGMT_MODULE="/etc/context.d/modules/mgmt.sh"
-if [ -x "$MGMT_MODULE" ]; then
-    echo "$(date) [context] Running MGMT module $MGMT_MODULE (MGMT_ENABLE=${MGMT_ENABLE})" >> "$LOG"
-    export MGMT_ENABLE MGMT_IF MGMT_PORT
-    # shellcheck disable=SC1090
-    . "$MGMT_MODULE" >>"$LOG" 2>&1
-    status=$?
-    if [ $status -eq 0 ]; then
-        echo "$(date) [context] MGMT module finished successfully" >> "$LOG"
-    else
-        echo "$(date) [context] MGMT module failed (exit $status)" >> "$LOG"
-    fi
-fi
-rm -f "$PID" # Удаляем PID файл, если он есть
 echo "$(date) [context] FINISH" >> "$LOG"

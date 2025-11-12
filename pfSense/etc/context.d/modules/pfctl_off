@@ -3,7 +3,6 @@
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin:/root/bin
 PFPID_FILE=/var/run/pfctlcontext.pid
 LOG=/var/log/context.log
-SCRIPT_VERSION="PFCTL v0.3.3"
 #LOG=/dev/null
 
 # Проверяем наличие PID-файла
@@ -11,6 +10,6 @@ SCRIPT_VERSION="PFCTL v0.3.3"
 # shellcheck disable=SC2034  # i is intentionally unused
 if pfctl -s info 2>/dev/null | grep -qi 'Status: Enabled'; then
    pfctl -d >> "$LOG" 2>&1
-   echo "$(date) [cron-context] $SCRIPT_VERSION disabled pfctl" >> "$LOG"
+   echo "$(date) [context-cron]  disabled pfctl" >> "$LOG"
 fi
 
