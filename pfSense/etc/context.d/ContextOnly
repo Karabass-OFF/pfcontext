@@ -394,6 +394,7 @@ fi
 FIRSTBOOT_FLAG="/etc/context.d/firstboot"
 if [ ! -f "$FIRSTBOOT_FLAG" ] || [ "${FIRST_BOOT}" = "YES" ]; then
     #touch /etc/context.d/firstboot
+    # create firstboot flag file for cron job 2 minutes later boot system /etc/cron.d/context
 
     # BGP-модуль 
     # shellcheck disable=SC1091
@@ -402,11 +403,15 @@ if [ ! -f "$FIRSTBOOT_FLAG" ] || [ "${FIRST_BOOT}" = "YES" ]; then
     # Модуль управления management-интерфейсом
     # shellcheck disable=SC1091
     [ "${MGMT_ENABLE}" = "YES" ] && . /etc/context.d/modules/mgmt.sh 
-echo "CONTEXT_IPSEC_ENABLE=$CONTEXT_IPSEC_ENABLE"
+    
     # Модуль настройки IPsec
     # shellcheck disable=SC1091
     [ "${CONTEXT_IPSEC_ENABLE}" = "YES" ] && . /etc/context.d/modules/ipsec.sh 
-    
+
+    # Модуль настройки NAT
+    # shellcheck disable=SC1091
+    [ "${NAT_ENABLE}" = "YES" ] && . /etc/context.d/modules/nat.sh
+
     echo "$(date) [context] First boot operations completed, created /etc/context.d/firstboot" >> "$LOG"
 else
     echo "$(date) [context] Not first boot, skipping runing modules: bgp, mgmt, ipsec" >> "$LOG"
