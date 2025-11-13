@@ -14,7 +14,7 @@
 #   MGMT_SRC_DEFAULT_IF=lan    # если MGMT_SRC содержит «голый» CIDR без iface
 # -------------------------------------------------------------------
 : "${MGMT_ENABLE:=YES}"
-: "${MGMT_IF:=wan}"
+: "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,80,443}"
 : "${MGMT_SRC:=${MGMT_IF}:any}"
 : "${MGMT_SRC_DEFAULT_IF:=${MGMT_IF}}"
@@ -283,7 +283,6 @@ else
       system_routing_configure();
     }
   "
-
   # 5) применить
   log "Applying aliases + filter"
   apply_php "${php_apply_aliases_and_filter}"

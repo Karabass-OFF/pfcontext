@@ -15,28 +15,28 @@ if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "YES" ]; th
      xml ed -L \
         -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
         "$backup_xml_file"
-    echo "$(date) [context:pfctl.sh] BLOCK_PRIVATE_NETWORKS" >> "$LOG"
+    echo "$(date) [context:pfctl.sh] BLOCK_PRIVATE_NETWORKS ($BLOCK_PRIVATE_NETWORKS)" >> "$LOG"
 else
     xml ed -L \
         -d "//interfaces/$network/blockpriv" \
         "$backup_xml_file"
-    echo "$(date) [context:pfctl.sh] No BLOCK_PRIVATE_NETWORKS" >> "$LOG"
+    echo "$(date) [context:pfctl.sh] No BLOCK_PRIVATE_NETWORKS ($BLOCK_PRIVATE_NETWORKS)" >> "$LOG"
 fi
 # Отключаем/Включаем bogon networks для WAN
 if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "YES" ]; then
     xml ed -L \
         -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
         "$backup_xml_file"
-    echo "$(date) [context:pfctl.sh-network] BLOCK_BOGON_NETWORKS" >> "$LOG"
+    echo "$(date) [context:pfctl.sh-network] BLOCK_BOGON_NETWORKS ($BLOCK_BOGON_NETWORKS)" >> "$LOG"
 else
     xml ed -L \
         -d "//interfaces/$network/blockbogons" \
         "$backup_xml_file"
-    echo "$(date) [context:pfctl.sh] No BLOCK_BOGON_NETWORKS" >> "$LOG"
+    echo "$(date) [context:pfctl.sh] No BLOCK_BOGON_NETWORKS ($BLOCK_BOGON_NETWORKS)" >> "$LOG"
 fi
 
 # Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
-# RC_RELOAD_IFACE=YES|NO (по умолчанию NO)
+# RC_RELOAD_IFACE=YES|NO 
 hash1="$(xml sel -t -c "//interfaces" "$xml_file" | xml fo -n -o | tr -d '\n' | md5)"
 cp "$xml_file" "/root/xml_file"
 cp "$backup_xml_file" "/root/backup_xml_file"

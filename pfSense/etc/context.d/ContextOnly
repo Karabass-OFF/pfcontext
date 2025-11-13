@@ -16,8 +16,8 @@ cp "$xml_file"  "$backup_xml_file" # Создаем резервную копи�
 : "${WAN_GATEWAY:=}" # desired WAN gateway from context variables
 : "${PASSWORD_ROOT:=}" # root password override variable
 : "${BGP_ENABLE:=NO}" # по умолчанию BGP выключен
-: "${BLOCK_PRIVATE_NETWORKS:=NO}" # по умолчанию NO, не блокировать private-сети
-: "${BLOCK_BOGON_NETWORKS:=NO}" # по умолчанию NO, не блокировать bogon-сети
+: "${BLOCK_PRIVATE_NETWORKS:=YES}" # по умолчанию NO, не блокировать private-сети
+: "${BLOCK_BOGON_NETWORKS:=YES}" # по умолчанию NO, не блокировать bogon-сети
 : "${RC_RELOAD_ALL:=NO}" # по умолчанию NO, полный рестарт служб
 : "${RC_RELOAD_IFACE:=NO}" # по умолчанию NO, рестарт интерфейсов
 : "${SSH_PUBLIC_KEY:=}" # public key for root access
@@ -25,6 +25,7 @@ cp "$xml_file"  "$backup_xml_file" # Создаем резервную копи�
 : "${PFCTL:=NO}" # defined in pfctl_off
 : "${FIRST_BOOT:=YES}" # defined in firstboot flag file
 : "${CONTEXT_IPSEC_ENABLE:=NO}" # defined in context.sh
+
 
 echo "$(date) [context] === START ContextOnly ===" >> "$LOG"
 # Монтируем CD-ROM, если он еще не смонтирован
