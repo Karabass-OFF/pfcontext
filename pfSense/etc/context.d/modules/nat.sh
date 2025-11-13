@@ -15,7 +15,7 @@
 #   NAT_ENABLE=YES
 #   NAT_IF=wan
 #   NAT_MODE=hybrid
-#   NAT_SRC="192.168.201.0/24"       # ТОЛЬКО твои локальные сети, НЕ 0.0.0.0/0
+#   NAT_SRC="192.168.201.0/24"       # ТОЛЬКО локальные сети, НЕ 0.0.0.0/0
 
 : "${NAT_ENABLE:=NO}"
 : "${NAT_IF:=wan}"
@@ -111,7 +111,7 @@ nat_apply() {
     if (isset(\$config['nat']['outbound']['rule']) && is_array(\$config['nat']['outbound']['rule'])) {
         \$count = count(\$config['nat']['outbound']['rule']);
     }
-    echo \"[NAT] Итоговый режим: {\$mode}, правил: {\$count}\n\";
+     echo '[' . date('Y-m-d H:i:s') . '][context-NAT:nat.sh] Итоговый режим: ' . \$mode . ', правил: ' . \$count . \"\n\";
   " >>"$LOG" 2>/dev/null
 
   log "NAT модуль завершён"
