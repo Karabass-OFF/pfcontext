@@ -7,30 +7,40 @@
 | Путь | Назначение |
 | --- | --- |
 | `pfSense/INSTALL` | Краткий чек-лист развертывания пакета контекстных скриптов на pfSense. |
-| `pfSense/etc/rc.initial` | Модифицированный `rc.initial`, который запускает `ResizeZfs` и `ContextOnly` в начале загрузки. |
-| `pfSense/etc/context.d/ContextOnly` | Основной модуль: читает `context.sh`, применяет сеть, системные параметры и вызывает BGP. |
+| `pfSense/etc/rc.initial` | Модифицированный `rc.initial`, который запускает `/etc/context.d/modules/ResizeZfs` и `ContextOnly` в начале загрузки. |
+| `pfSense/etc/context.d/ContextOnly` | Основной модуль: читает `context.sh`, применяет сеть, системные параметры и вызывает дочерние модули. |
+| `pfSense/etc/context.d/VERSION` | Текстовая версия пакета, отображаемая в логах. |
+| `pfSense/etc/context.d/modules/ResizeZfs` | Расширение ZFS-раздела и пула при увеличении виртуального диска. |
+| `pfSense/etc/context.d/modules/addsshkey.sh` | Добавляет публичный ключ `SSH_PUBLIC_KEY` в `/root/.ssh/authorized_keys` и `config.xml` (base64). |
 | `pfSense/etc/context.d/modules/bgp` | Интеграция с FRR/BGP и инкрементальное обновление маршрутизации. |
-| `pfSense/etc/context.d/ResizeZfs` | Расширение ZFS-раздела и пула при увеличении виртуального диска. |
-| `pfSense/etc/context.d/pfctl_off` | Поддержка выключения pfctl по PID-файлу через cron. |
+| `pfSense/etc/context.d/modules/ipsec.sh` | Генерация и идемпотентное обновление IPsec-туннелей, управление strongSwan и вызов плагинов. |
+| `pfSense/etc/context.d/modules/ipsec-plugins/firewall-rules.sh` | Создает/обновляет IKE/NAT-T/ESP правила на интерфейсах Phase1 и универсальные allow-all правила на IPsec/enc0. |
+| `pfSense/etc/context.d/modules/ipsec-plugins/strat-nonblok.sh` | Немедленно инициирует все IPsec-соединения через `swanctl`, не блокируя основной поток. |
 | `pfSense/etc/context.d/modules/mgmt.sh` | Управление выделенным MGMT-интерфейсом: алиасы, правила firewall и anti-lockout. |
-| `pfSense/etc/context.d/modules/ipsec.sh` | Генерация и идемпотентное обновление IPsec-туннелей, WAN/IPsec-ACL и запуск strongSwan. |
+| `pfSense/etc/context.d/modules/nat.sh` | Идемпотентно настраивает outbound NAT в режимах automatic/hybrid/advanced с кастомными сетями. |
+| `pfSense/etc/context.d/modules/pfctl.sh` | Управляет WAN-настройками (gateway, blockpriv/bogons) и решает, нужно ли перезапускать интерфейсы. |
+| `pfSense/etc/context.d/modules/reload-iface.sh` | Выполняет `rc.reload_all`, `restartallwan` и переключает `pfctl` в требуемое состояние. |
+| `pfSense/etc/context.d/modules/pfctl_off` | Скрипт для cron: отключает pfctl по PID-файлу `/var/run/pfctlcontext.pid`. |
+| `pfSense/etc/context.d/modules/sync-conf.sh` | Сравнивает `config.xml` и рабочую копию, сохраняет изменения при необходимости. |
 | `pfSense/etc/devd/context.conf` | Триггеры `devd` для запуска контекста при событиях CD-ROM/диска/интерфейсов. |
 | `pfSense/etc/cron.d/context` | Cron-задача для регулярного вызова `pfctl_off`. |
 | `pfSense/etc/phpshellsessions/ChangePassTool` | Скрипт pfSense для смены пароля `admin`, используемый контекстом. |
 
 ## Последовательность выполнения и взаимосвязь модулей
-1. **Загрузка pfSense и запуск ранних команд.** Патч `rc.initial` добавляет последовательный вызов `ResizeZfs` и `ContextOnly`, поэтому сценарии стартуют в штатной цепочке загрузки сразу после монтирования конфигурации.
+1. **Загрузка pfSense и запуск ранних команд.** Патч `rc.initial` добавляет последовательный вызов `/etc/context.d/modules/ResizeZfs` и `ContextOnly`, поэтому сценарии стартуют в штатной цепочке загрузки сразу после монтирования конфигурации.
 2. **Обработка аппаратных событий.** `devd` дополнительно вызывает `ContextOnly`, когда в систему вставляется ISO `CONTEXT`, и `ResizeZfs` при изменении размера диска, а также отмечает изменения сетевых интерфейсов в `/etc/context.d/net.pid`.
 3. **Основной модуль ContextOnly.**
-   - Монтирует CD-ROM `/dev/cd0` в `/mnt/context`, читает `context.sh`, делает резервную копию `config.xml` и подготавливает вспомогательную функцию `get_ctx_var` для чтения `ETHx_*` переменных.
-   - Анализирует требуемые интерфейсы (MAC, типы), при необходимости очищает секцию `<interfaces>` в `config.xml`, сопоставляет MAC-адреса, назначает роли LAN/WAN/OPT, прописывает IP/маску/шлюз, отключает `blockpriv/bogons` на WAN и обновляет `config.xml`.
-   - Собирает DNS-адреса, задаёт hostname, по опциям `RC_RELOAD_ALL`/`RC_RELOAD_IFACE` перезапускает службы/интерфейсы, управляет состоянием pfctl через `PFCTL`, обновляет пароль `admin`, размонтирует CD-ROM и запускает модуль BGP, если он доступен.
+     - Монтирует CD-ROM `/dev/cd0` в `/mnt/context`, читает `context.sh`, делает резервную копию `config.xml`, подготавливает вспомогательную функцию `get_ctx_var` и файл для работы `xmlstarlet`.
+   - Анализирует требуемые интерфейсы (MAC, типы), при необходимости очищает секцию `<interfaces>` в `config.xml`, сопоставляет MAC-адреса, назначает роли LAN/WAN/OPT, прописывает IP/маску/шлюз и обновляет конфигурацию.
+   - Собирает DNS-адреса, задаёт hostname, формирует флаги `RC_RELOAD_ALL`/`RC_RELOAD_IFACE` и `PFCTL`, чтобы downstream-модули знали, что перезапускать; обновляет пароль `admin`, размонтирует CD-ROM и запускает модуль BGP, если он доступен.
    - При наличии `SSH_PUBLIC_KEY` кодирует ключ в Base64, записывает его в `config.xml` (секция пользователя `admin`) и добавляет в `/root/.ssh/authorized_keys`, чтобы ключ был доступен сразу после инициализации.
+   - После применения правок вызывает `modules/sync-conf.sh`, который сравнивает рабочую копию `config.xml` с оригиналом и записывает изменения только при наличии дельты.
 4. **Модуль BGP.** Запускается из `ContextOnly` и выполняет полную цепочку проверки зависимостей FRR, подгрузки `context.sh` при необходимости, генерации `config.xml` через PHP и применения настроек в рантайме через `vtysh`. Для предотвращения избыточных изменений хранит контрольные суммы и состояния сетей/соседей в `/var/run/context-bgp.*`.
-5. **IPsec-модуль (`modules/ipsec.sh`).** При `CONTEXT_IPSEC_ENABLE=YES` читает параметры туннелей, задаёт дефолты Phase1/Phase2 для каждого индекса, идемпотентно создаёт или обновляет секции `phase1/phase2` в `config.xml`, формирует набор WAN-правил (UDP/500, UDP/4500, ESP) для каждого peer и правила на интерфейсе IPsec по сетям Phase2, вызывает `ipsec_configure()`, контролирует сервис strongSwan и инициирует подключения через `swanctl`. Для диагностик пишет подробные логи в `/var/log/context.log`.
-6. **Модуль управления management-интерфейсом (`modules/mgmt.sh`).** Активируется, когда в `context.sh` выставлено `MGMT_ENABLE=YES`: переводит выбранный логический интерфейс `MGMT_IF` в режим управляемого доступа, отключает anti-lockout веб-интерфейса, удаляет gateway, синхронизирует алиас `MGMT_PORTS`, строит ACL `[MGMT]` согласно источникам из `MGMT_SRC` и добавляет блокирующее правило `block any→mgmtIP` на задействованных интерфейсах. При `MGMT_ENABLE=NO` выполняет обратные операции и возвращает конфигурацию в исходное состояние.
-7. **ResizeZfs.** Может запускаться как на старте, так и при событиях `devd`; расширяет ZFS-раздел и пул `pfSense`, если обнаружено свободное место и нет повреждений GPT.
-8. **Периодический контроль firewall.** `cron` каждую минуту запускает `pfctl_off`, который отключает pfctl, если существует PID-файл `/var/run/pfctlcontext.pid`. Это позволяет оставлять firewall выключенным до завершения контекстной инициализации.
+5. **IPsec-модуль (`modules/ipsec.sh`).** При `CONTEXT_IPSEC_ENABLE=YES` читает параметры туннелей, задаёт дефолты Phase1/Phase2 для каждого индекса, идемпотентно создаёт или обновляет секции `phase1/phase2` в `config.xml`, вызывает `ipsec_configure()`, контролирует strongSwan и инициирует подключения через `swanctl`. Встроенные плагины `ipsec-plugins/firewall-rules.sh` и `ipsec-plugins/strat-nonblok.sh` автоматически создают IKE/NAT-T/ESP правила на нужных интерфейсах и немедленно запускают `swanctl --initiate` в неблокирующем режиме.
+6. **Модуль NAT (`modules/nat.sh`).** При `NAT_ENABLE=YES` проверяет наличие интерфейса из `NAT_IF`, выставляет режим outbound NAT (automatic/hybrid/advanced/disabled) и при гибридном/advanced-режиме пересобирает набор правил для сетей `NAT_SRC`, затем вызывает `filter_configure()`.
+7. **Перезапуски служб и состояние pfctl (`modules/pfctl.sh`, `modules/reload-iface.sh`, `modules/pfctl_off`).** `pfctl.sh` управляет WAN-параметрами (удаляет дефолтный маршрут при включённом BGP, переключает `blockpriv/bogons`, считает хэш секции `<interfaces>`), а `reload-iface.sh` реагирует на флаги `RC_RELOAD_*` и `PFCTL`: вызывает `rc.reload_all`/`restartallwan`, включает или отключает pfctl и при необходимости создаёт PID-файл `/var/run/pfctlcontext.pid`. Cron-задача `modules/pfctl_off` каждую минуту проверяет этот PID-файл и держит pfctl отключённым до завершения инициализации.
+8. **Модуль управления management-интерфейсом (`modules/mgmt.sh`).** Активируется, когда в `context.sh` выставлено `MGMT_ENABLE=YES`: переводит выбранный логический интерфейс `MGMT_IF` в режим управляемого доступа, отключает anti-lockout веб-интерфейса, удаляет gateway, синхронизирует алиас `MGMT_PORTS`, строит ACL `[MGMT]` согласно источникам из `MGMT_SRC` и добавляет блокирующее правило `block any→mgmtIP` на задействованных интерфейсах. При `MGMT_ENABLE=NO` выполняет обратные операции и возвращает конфигурацию в исходное состояние.
+9. **ResizeZfs.** Может запускаться как на старте, так и при событиях `devd`; расширяет ZFS-раздел и пул `pfSense`, если обнаружено свободное место и нет повреждений GPT.
 Первичный запуск теперь осуществляется штатным механизмом pfSense.
 
 ## Процесс установки
@@ -39,7 +49,7 @@
    - `xmlstarlet` (команда `pkg install -y xmlstarlet`) — предоставляет утилиту `xml`, которой оперирует `ContextOnly` для редактирования `config.xml` и чтения текущих значений.
    - `php` CLI — уже входит в pfSense, но модуль BGP проверяет наличие `/usr/local/bin/php`; убедитесь, что пакет установлен.
    - `pfSense-pkg-frr` или `frr9` — обязательны для работы BGP-модуля; устанавливаются через `pkg install` (скрипт предлагает найти актуальный пакет командой `pkg search -x frr`).
-3. Добавьте ранний запуск контекста. Откройте `config.xml` и в раздел `<system>` добавьте строку `<earlyshellcmd>/etc/context.d/ResizeZfs && /etc/context.d/ContextOnly </earlyshellcmd>` либо следуйте подсказкам из `pfSense/INSTALL`.
+3. Добавьте ранний запуск контекста осушествляется через `/etc/rc.initial` следуйте подсказкам из `pfSense/INSTALL`.
 4. При необходимости очистите логи/бэкапы (опциональный шаг из исходной инструкции).
 5. Перезагрузите устройство pfSense, чтобы запустился новый поток инициализации.
 
@@ -62,9 +72,15 @@
 ### Фаервол и доступ
 - `PASSWORD_ROOT` или `PASSWORD` — новый пароль пользователя `admin` (через `ChangePassTool`).
 - `SSH_PUBLIC_KEY` — публичный SSH-ключ для `admin` (base64 → `config.xml`).
-- `PFCTL` — целевое состояние firewall (`YES`/`NO`).
+- `PFCTL` — целевое состояние firewall (`YES`/`NO`), которое применяет `reload-iface.sh`.
 - `BLOCK_PRIVATE_NETWORKS` — сохраняет фильтр `blockpriv` на WAN при `on`.
 - `BLOCK_BOGON_NETWORKS` — сохраняет фильтр `blockbogons` на WAN при `on`
+
+### NAT (outbound)
+- `NAT_ENABLE` — включает применение `modules/nat.sh` (значение `YES`).
+- `NAT_IF` — логическое имя внешнего интерфейса pfSense, через который выполняется NAT (например, `wan`).
+- `NAT_MODE` — режим outbound NAT (`automatic`, `hybrid`, `advanced`, `disabled`).
+- `NAT_SRC` — перечень локальных сетей (через пробел) для генерации правил в hybrid/advanced-режимах; не используйте `0.0.0.0/0`, чтобы не ломать выход в интернет.
 
 ### Управление management-интерфейсом
 - `MGMT_ENABLE` — включает (YES) или отключает (NO) применение модуля `mgmt.sh` для выбранного интерфейса.
@@ -135,31 +151,22 @@ BGP_REDIST_STATIC="no"
 MGMT_ENABLE="YES"
 MGMT_IF="lan"
 MGMT_PORT="22 443 4443"
-MGMT_SRC="ipsec:any,lan:net,203.0.113.10/32"
-# IPsec
-CONTEXT_IPSEC_ENABLE="YES"
-CONTEXT_IPSEC_TUNNELS="1"
-CONTEXT_IPSEC_1_REMOTE="91.185.11.170"
-CONTEXT_IPSEC_1_PSK="<секретный ключ>"
-CONTEXT_IPSEC_1_LOCALID="wan"
-CONTEXT_IPSEC_1_LOCAL_NET="192.168.201.0/24"
-CONTEXT_IPSEC_1_REMOTE_NET="10.11.11.0/24"
+
 ```
 
 ### Журналы модулей
 
 | Файл | Источник | Что фиксируется |
 | --- | --- | --- |
-| `/var/log/context.log` | `pfSense/etc/context.d/ContextOnly` и ранние хуки загрузки | Последовательность инициализации: монтирование ISO, настройка интерфейсов, DNS, обновление пароля, вызовы модулей.
-| `/var/log/context-bgp.log` | `pfSense/etc/context.d/bgp` | Дамп переменных, проверка зависимостей FRR, ход инкрементального обновления соседей и сетей, ошибки применения через `vtysh`.
-| `/var/log/context-firewall.log` | `pfSense/etc/context.d/firewall` (если модуль установлен) | Действия по генерации правил, предупреждения/ошибки, отчёт об изменённых правилах с префиксами `[INFO]`, `[WARN]`, `[ERROR]`, `[DEBUG]`.
-| Пользовательский файл из переменной `LOG` | `pfSense/etc/context.d/ResizeZfs`, `pfSense/etc/context.d/pfctl_off` | Вывод о расширении ZFS и управлении pfctl; по умолчанию перенаправляется в `/dev/null`, при необходимости укажите путь для протоколирования.
+| `/var/log/context.log` | `pfSense/etc/context.d/ContextOnly`, `pfSense/etc/context.d/modules/*` | Последовательность инициализации: монтирование ISO, настройка интерфейсов, DNS, NAT, IPsec, pfctl, обновление пароля, вызовы модулей и вывод `ResizeZfs`.
+| `/var/log/context.log` | `pfSense/etc/context.d/modules/bgp` | Дамп переменных, проверка зависимостей FRR, ход инкрементального обновления соседей и сетей, ошибки применения через `vtysh`.
+| Пользовательский файл из переменной `LOG` | `pfSense/etc/context.d/modules/ResizeZfs`, `pfSense/etc/context.d/modules/pfctl_off` | Вывод о расширении ZFS и управлении pfctl; по умолчанию перенаправляется в `/dev/null`, при необходимости укажите путь для протоколирования.
 
 ### Практические советы
 
-- Повторный запуск контекста вручную: `/etc/context.d/ContextOnly` (аналогично можно перезапустить `ResizeZfs`). Полезно после ручного редактирования `context.sh` без перезагрузки.
+- Повторный запуск контекста вручную: `/etc/context.d/ContextOnly` (аналогично можно перезапустить `ResizeZfs`). Полезно для диагностики `context.sh` без перезагрузки.
 - Проверка установки пакетов: `pkg info xmlstarlet`, `pkg info pfSense-pkg-frr` или `pkg info frr9` помогают убедиться, что зависимые утилиты доступны.
-- Если firewall отключён через `PFCTL=off`, убедитесь, что создан PID-файл `/var/run/pfctlcontext.pid` (его создание должно выполнять внешняя логика) — иначе cron-задача не будет вмешиваться.
+- Если firewall отключён через `PFCTL=NO`, убедитесь, что создан PID-файл `/var/run/pfctlcontext.pid` (его создание должно выполнять внешняя логика) — иначе cron-задача не будет вмешиваться.
 - При расширении диска проверьте вывод `zpool list pfSense` и включите логирование `ResizeZfs`, чтобы убедиться, что zpool увеличен.
 
 Соблюдение этих шагов обеспечивает корректное автоматическое конфигурирование pfSense в инфраструктуре OpenNebula, а README выступает в качестве справочника для администраторов.
