@@ -23,7 +23,7 @@
 | `pfSense/etc/context.d/modules/pfctl_off` | Скрипт для cron: отключает pfctl по PID-файлу `/var/run/pfctlcontext.pid`. |
 | `pfSense/etc/context.d/modules/sync-conf.sh` | Сравнивает `config.xml` и рабочую копию, сохраняет изменения при необходимости. |
 | `pfSense/etc/devd/context.conf` | Триггеры `devd` для запуска контекста при событиях CD-ROM/диска/интерфейсов. |
-| `pfSense/etc/cron.d/context` | Cron-задача для регулярного вызова `pfctl_off`. |
+| `pfSense/etc/cron.d/context` | Cron-задачи: каждую минуту вызывается `pfctl_off`, а при загрузке (`@reboot`) через 180 секунд создаётся флаг `/etc/context.d/firstboot`, чтобы последующие запуски `ContextOnly` не выполнялись повторно модули. |
 | `pfSense/etc/phpshellsessions/ChangePassTool` | Скрипт pfSense для смены пароля `admin`, используемый контекстом. |
 
 ## Последовательность выполнения и взаимосвязь модулей
@@ -41,7 +41,8 @@
 7. **Перезапуски служб и состояние pfctl (`modules/pfctl.sh`, `modules/reload-iface.sh`, `modules/pfctl_off`).** `pfctl.sh` управляет WAN-параметрами (удаляет дефолтный маршрут при включённом BGP, переключает `blockpriv/bogons`, считает хэш секции `<interfaces>`), а `reload-iface.sh` реагирует на флаги `RC_RELOAD_*` и `PFCTL`: вызывает `rc.reload_all`/`restartallwan`, включает или отключает pfctl и при необходимости создаёт PID-файл `/var/run/pfctlcontext.pid`. Cron-задача `modules/pfctl_off` каждую минуту проверяет этот PID-файл и держит pfctl отключённым до завершения инициализации.
 8. **Модуль управления management-интерфейсом (`modules/mgmt.sh`).** Активируется, когда в `context.sh` выставлено `MGMT_ENABLE=YES`: переводит выбранный логический интерфейс `MGMT_IF` в режим управляемого доступа, отключает anti-lockout веб-интерфейса, удаляет gateway, синхронизирует алиас `MGMT_PORTS`, строит ACL `[MGMT]` согласно источникам из `MGMT_SRC` и добавляет блокирующее правило `block any→mgmtIP` на задействованных интерфейсах. При `MGMT_ENABLE=NO` выполняет обратные операции и возвращает конфигурацию в исходное состояние.
 9. **ResizeZfs.** Может запускаться как на старте, так и при событиях `devd`; расширяет ZFS-раздел и пул `pfSense`, если обнаружено свободное место и нет повреждений GPT.
-Первичный запуск теперь осуществляется штатным механизмом pfSense.
+Первичный запуск теперь осуществляется штатным механизмом pfSense. Модули `bgp`, `mgmt.sh`, `ipsec.sh` и `nat.sh` вызываются ContextOnly только при первом запуске (или когда вручную выставлена переменная `FIRST_BOOT=YES`); при последующих вызовах блок целиком пропускается.
+
 
 ## Процесс установки
 1. Скопируйте содержимое каталога `pfSense` на целевую систему (например, через `scp -r ./ root@pfSense:/`).
@@ -61,6 +62,7 @@
 | --- | --- |
 | `SET_HOSTNAME` | Имя хоста, которое записывается в систему и `config.xml`. |
 | `RC_RELOAD_ALL` / `RC_RELOAD_IFACE` | Управление перезапуском служб/интерфейсов после изменения `config.xml`. |
+| `FIRST_BOOT` | Контролирует запуск «первичных» модулей (`bgp`, `mgmt.sh`, `ipsec.sh`, `nat.sh`). Значение `YES` (по умолчанию) позволяет выполнить цепочку сразу после развертывания; чтобы принудительно перезапустить эти модули позже, временно установите `FIRST_BOOT=YES`. |
 | `CONTEXT`-переменные среды | Внутренние переменные (`CONTEXT_MOUNT`, `CONTEXT_DEV`, `PID`) управляют процессом монтирования ISO и отслеживанием изменений интерфейсов. Пользователю их задавать не нужно, но важно знать о лог-файле `/var/log/context.log`. |
 
 ### Сеть
@@ -73,8 +75,9 @@
 - `PASSWORD_ROOT` или `PASSWORD` — новый пароль пользователя `admin` (через `ChangePassTool`).
 - `SSH_PUBLIC_KEY` — публичный SSH-ключ для `admin` (base64 → `config.xml`).
 - `PFCTL` — целевое состояние firewall (`YES`/`NO`), которое применяет `reload-iface.sh`.
-- `BLOCK_PRIVATE_NETWORKS` — сохраняет фильтр `blockpriv` на WAN при `on`.
-- `BLOCK_BOGON_NETWORKS` — сохраняет фильтр `blockbogons` на WAN при `on`
+- `BLOCK_PRIVATE_NETWORKS` — оставляет фильтр `blockpriv` на WAN при значении `YES` (значение по умолчанию — `YES`); при `NO` правило удаляется.
+- `BLOCK_BOGON_NETWORKS` — аналогично управляет `blockbogons` на WAN: `YES` оставляет правило (по умолчанию), `NO` — убирает его.
+
 
 ### NAT (outbound)
 - `NAT_ENABLE` — включает применение `modules/nat.sh` (значение `YES`).
@@ -85,9 +88,9 @@
 ### Управление management-интерфейсом
 - `MGMT_ENABLE` — включает (YES) или отключает (NO) применение модуля `mgmt.sh` для выбранного интерфейса.
 - `MGMT_IF` — логическое имя интерфейса pfSense (`lan`, `wan`, `optN`), для которого настраиваются правила доступа и убирается шлюз.
-- `MGMT_PORT` — перечень TCP-портов (через пробел), из которых формируется алиас `MGMT_PORTS` и разрешается доступ к webGUI/SSH; ICMP добавляется автоматически.
+- `MGMT_PORT` — перечень TCP-портов (через запятую), из которых формируется алиас `MGMT_PORTS` и разрешается доступ к webGUI/SSH; ICMP добавляется автоматически.
 - `MGMT_SRC` — список источников доступа (через запятую). Поддерживаются `iface:any|net`, CIDR/хосты и комбинации `iface:CIDR`; для каждого значения создаются правила Allow ICMP/TCP.
-- `MGMT_SRC_DEFAULT_IF` — интерфейс pfSense, к которому будут привязываться источники без явного `iface:` (по умолчанию `ipsec`).
+- `MGMT_SRC_DEFAULT_IF` — интерфейс pfSense, к которому будут привязываться источники без явного `iface:` (по умолчанию совпадает с `MGMT_IF`).
 
 ### IPsec
 - `CONTEXT_IPSEC_ENABLE` — включает применение модуля `ipsec.sh` (по умолчанию `YES`).
@@ -131,8 +134,8 @@ ETH1_DNS="192.168.10.1"
 SET_HOSTNAME="pfsense-demo"
 PFCTL="off"
 RC_RELOAD_ALL="on"
-BLOCK_PRIVATE_NETWORKS="on"
-BLOCK_BOGON_NETWORKS="off"
+BLOCK_PRIVATE_NETWORKS="YES"
+BLOCK_BOGON_NETWORKS="NO"
 PASSWORD="SuperSecret123"
 SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3Nz... user@example"
 
@@ -157,7 +160,7 @@ NAT_SRC="192.168.10.0/24 192.168.201.0/24"
 # MGMT
 MGMT_ENABLE="YES"
 MGMT_IF="lan"
-MGMT_PORT="22 443 4443"
+MGMT_PORT="22,443,4443"
 
 ```
 
