@@ -38,8 +38,6 @@ fi
 # Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
 # RC_RELOAD_IFACE=YES|NO 
 hash1="$(xml sel -t -c "//interfaces" "$xml_file" | xml fo -n -o | tr -d '\n' | md5)"
-cp "$xml_file" "/root/xml_file"
-cp "$backup_xml_file" "/root/backup_xml_file"
 hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | xml fo -n -o | tr -d '\n' | md5)"
 if [ "$hash1" != "$hash2" ]; then
    { export RC_RELOAD_IFACE="YES"
