@@ -1,14 +1,15 @@
 #!/bin/sh
 # =====================================================================
 #  pfContext Module — NAT (Outbound)
-#  Version: v1.2 (simplified)
-#  Purpose: sets outbound NAT mode and firewall rules.
+#  Version: v2.2
+#  Modes: automatic | hybrid | manual(advanced) | disabled
 # =====================================================================
 
-: "${NAT_ENABLE:=YES}"  # enable NAT module
-: "${NAT_IF:=wan}"      # outbound NAT interface
-: "${FW_IF:=opt1}"      # firewall allow-all
-: "${NAT_MODE:=hybrid}" # outbound NAT mode: automatic, hybrid, manual
+: "${NAT_ENABLE:=YES}"
+: "${NAT_IF:=wan}"        # outbound interface
+: "${FW_IF:=opt1}"        # internal interface (source network for NAT)
+: "${NAT_MODE:=manual}"   # recommended use manual or disabled, tested hybrid and automatic 
+
 LOG="/var/log/context.log"
 
 log() {
@@ -16,64 +17,128 @@ log() {
 }
 
 # =====================================================================
-# 1.  NAT Mode Handling
+# Helper: get interface NETWORK/CIDR (not host IP) 
 # =====================================================================
-
-nat_apply() {
- log "Starting NAT module"
-
-  [ "$NAT_ENABLE" != "YES" ] && {
-    log "NAT disabled — exiting"
-    return 0
-  }
-
-  #  Validate NAT interface
-  IF_REAL=$(/usr/local/bin/php -r "
+iface_info() {
+  /usr/local/bin/php -r "
     require_once('/etc/inc/interfaces.inc');
-    \$if = get_real_interface('$NAT_IF');
-    if (!empty(\$if)) echo \$if;
-  " 2>/dev/null)
+    require_once('/etc/inc/util.inc');
 
-  if [ -z "$IF_REAL" ]; then
-    log "ERROR: interface '$NAT_IF' does not exist"
-    return 1
-  fi
+    \$if = '$1';
+    \$real = get_real_interface(\$if);
+    if (!\$real) { echo \"ERR:no_if\"; exit; }
 
-  log "Using outbound interface: $NAT_IF ($IF_REAL)"
-  log "Requested NAT mode: $NAT_MODE"
+    \$ip   = get_interface_ip(\$if);
+    \$mask = get_interface_subnet(\$if);   // CIDR: 24, 16 ...
+
+    if (!\$ip || !\$mask) { echo \"ERR:no_ip\"; exit; }
+
+    // network = e.g. 10.121.14.0
+    \$net = gen_subnet(\$ip, \$mask);
+
+    echo \"\$net/\$mask\";
+  "
+}
+
+# =====================================================================
+# 1. Set NAT mode (only mode, без правил)
+# =====================================================================
+nat_set_mode() {
+  log "Setting NAT mode to $NAT_MODE on interface $NAT_IF"
+
+  # маппинг режимов pfSense
+  PFS_MODE="$NAT_MODE"
+  case "$NAT_MODE" in
+    manual)   PFS_MODE="advanced" ;;
+    disabled) PFS_MODE="disabled" ;;
+    automatic|hybrid) : ;;
+    *)        PFS_MODE="automatic" ;;
+  esac
 
   /usr/local/bin/php -r "
     require_once('/etc/inc/config.inc');
     require_once('/etc/inc/filter.inc');
     global \$config;
 
-    if (!is_array(\$config['nat']))             \$config['nat'] = [];
-    if (!is_array(\$config['nat']['outbound'])) \$config['nat']['outbound'] = [];
+    if (!isset(\$config['nat']) || !is_array(\$config['nat'])) {
+        \$config['nat'] = [];
+    }
+    if (!isset(\$config['nat']['outbound']) || !is_array(\$config['nat']['outbound'])) {
+        \$config['nat']['outbound'] = [];
+    }
 
-    // Set outbound NAT mode
-    \$config['nat']['outbound']['mode'] = '$NAT_MODE';
+    \$mode = '$PFS_MODE';
+    \$config['nat']['outbound']['mode'] = \$mode;
 
-    write_config('context: outbound NAT mode updated');
+    // Если режим automatic — чистим кастомные правила, как делает GUI
+    if (\$mode === 'automatic') {
+        unset(\$config['nat']['outbound']['rule']);
+    }
+
+    write_config('context: NAT mode updated');
     filter_configure();
   " 2>>"$LOG"
-
-  # Log final mode
-  /usr/local/bin/php -r "
-    require_once('/etc/inc/config.inc');
-    global \$config;
-    \$mode = \$config['nat']['outbound']['mode'] ?? 'undefined';
-    echo '[' . date('Y-m-d H:i:s') . '][context-NAT:nat.sh] Итоговый режим: ' . \$mode . \"\n\";
-  " >>"$LOG" 2>/dev/null
-
-  log "NAT module finished"
 }
 
 # =====================================================================
-# 2. Firewall Rule: allow-any + NOT interface IP
+# 2. Generate outbound NAT rule (для hybrid/advanced)
 # =====================================================================
+nat_generate_rule() {
+  CIDR=$(iface_info "$FW_IF")
 
+  if echo "$CIDR" | grep -q "^ERR"; then
+    log "Cannot generate NAT rule — interface $FW_IF has no IP/network"
+    return
+  fi
+
+  log "Generating outbound NAT rule: $CIDR → $NAT_IF"
+
+  /usr/local/bin/php -r "
+    require_once('/etc/inc/config.inc');
+    require_once('/etc/inc/filter.inc');
+    global \$config;
+
+    \$if_n = '$NAT_IF';
+    \$cidr = '$CIDR';
+
+    if (!isset(\$config['nat']) || !is_array(\$config['nat'])) {
+        \$config['nat'] = [];
+    }
+    if (!isset(\$config['nat']['outbound']) || !is_array(\$config['nat']['outbound'])) {
+        \$config['nat']['outbound'] = [];
+    }
+    if (!isset(\$config['nat']['outbound']['rule']) || !is_array(\$config['nat']['outbound']['rule'])) {
+        \$config['nat']['outbound']['rule'] = [];
+    }
+
+    // Duplicate protection
+    foreach (\$config['nat']['outbound']['rule'] as \$r) {
+        if (
+            (\$r['source']['network'] ?? '') === \$cidr &&
+            (\$r['interface'] ?? '') === \$if_n
+        ) {
+            // правило уже есть
+            exit;
+        }
+    }
+
+    \$config['nat']['outbound']['rule'][] = [
+        'interface'   => \$if_n,
+        'source'      => ['network' => \$cidr],
+        'destination' => ['any' => ''],
+        'descr'       => 'context-auto-outbound'
+    ];
+
+    write_config('context: outbound NAT rule added');
+    filter_configure();
+  " 2>>"$LOG"
+}
+
+# =====================================================================
+# 3. Firewall rule: allow-any NOT <IF_IP>
+# =====================================================================
 fw_allow_any() {
-  log "Creating allow-any rule on FW_IF: $FW_IF"
+  log "Adding firewall allow-any rule on $FW_IF"
 
   /usr/local/bin/php -r "
     require_once('/etc/inc/config.inc');
@@ -82,58 +147,74 @@ fw_allow_any() {
     global \$config;
 
     \$if = '$FW_IF';
-
-    // Validate interface
     \$real = get_real_interface(\$if);
-    if (empty(\$real)) {
-        echo \"FW_IF interface does not exist\n\";
-        exit;
-    }
+    if (!\$real) exit;
 
-    // Get IPv4 address
     \$ip = get_interface_ip(\$if);
-    if (empty(\$ip)) {
-        echo \"FW_IF has no IPv4 address\n\";
-        exit;
+    if (!\$ip) exit;
+
+    if (!isset(\$config['filter']) || !is_array(\$config['filter'])) {
+        \$config['filter'] = [];
+    }
+    if (!isset(\$config['filter']['rule']) || !is_array(\$config['filter']['rule'])) {
+        \$config['filter']['rule'] = [];
     }
 
-    if (!is_array(\$config['filter'])) \$config['filter'] = [];
-    if (!is_array(\$config['filter']['rule'])) \$config['filter']['rule'] = [];
-
-    // Check if rule already exists
-    foreach (\$config['filter']['rule'] as \$rule) {
+    // Duplicate check
+    foreach (\$config['filter']['rule'] as \$r) {
         if (
-            (\$rule['interface'] ?? '') === \$if &&
-            (\$rule['protocol'] ?? '') === 'any' &&
-            (\$rule['type'] ?? '') === 'pass' &&
-            isset(\$rule['destination']['not']) &&
-            (\$rule['destination']['address'] ?? '') === \$ip
+            (\$r['interface'] ?? '') === \$if &&
+            (\$r['protocol'] ?? '') === 'any' &&
+            isset(\$r['destination']['not']) &&
+            (\$r['destination']['address'] ?? '') === \$ip
         ) {
-            echo \"Rule already exists\n\";
             exit;
         }
     }
 
-    // Create new rule: PASS ANY → NOT <interface IP>
     \$config['filter']['rule'][] = [
-        'type'        => 'pass',
-        'interface'   => \$if,
-        'protocol'    => 'any',
-        'source'      => ['any' => ''],
-
+        'type'      => 'pass',
+        'interface' => \$if,
+        'protocol'  => 'any',
+        'source'    => ['any' => ''],
         'destination' => [
             'not'     => '',
-            'address' => \$ip   
+            'address' => \$ip
         ],
-
-        'descr'       => 'context-auto-allow-any'
+        'descr'     => 'context-auto-allow-any'
     ];
 
-    echo \"Added allow-any rule on \$if (not \$ip)\";
-    write_config('context: add allow-any rule (not interface IP)');
+    write_config('context: auto FW rule added');
     filter_configure();
   " 2>>"$LOG"
 }
 
-nat_apply
+# =====================================================================
+# Main
+# =====================================================================
+
+log "NAT module start — mode=$NAT_MODE NAT_IF=$NAT_IF FW_IF=$FW_IF"
+
+if [ "$NAT_ENABLE" != "YES" ]; then
+  log "NAT disabled — exit"
+  return 0
+fi
+
+nat_set_mode
+
+case "$NAT_MODE" in
+  hybrid|manual)
+    nat_generate_rule
+    ;;
+  automatic)
+    log "Mode automatic — pfSense manages NAT itself"
+    ;;
+  disabled)
+    log "Mode disabled — no outbound NAT rules"
+    ;;
+esac
+
 fw_allow_any
+
+log "NAT module finished successfully"
+exit 0

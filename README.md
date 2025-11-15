@@ -17,7 +17,7 @@
 | `pfSense/etc/context.d/modules/ipsec-plugins/firewall-rules.sh` | Создает/обновляет IKE/NAT-T/ESP правила на интерфейсах Phase1 и универсальные allow-all правила на IPsec/enc0. |
 | `pfSense/etc/context.d/modules/ipsec-plugins/strat-nonblok.sh` | Немедленно инициирует все IPsec-соединения через `swanctl`, не блокируя основной поток. |
 | `pfSense/etc/context.d/modules/mgmt.sh` | Управление выделенным MGMT-интерфейсом: алиасы, правила firewall и anti-lockout. |
-| `pfSense/etc/context.d/modules/nat.sh` | Идемпотентно настраивает outbound NAT в режимах automatic/hybrid/advanced с кастомными сетями. |
+| `pfSense/etc/context.d/modules/nat.sh` | Выставляет режим outbound NAT (automatic/hybrid/advanced/disabled) и при необходимости добавляет на выбранном интерфейсе правило allow-any с отрицанием IP самого интерфейса. |
 | `pfSense/etc/context.d/modules/pfctl.sh` | Управляет WAN-настройками (gateway, blockpriv/bogons) и решает, нужно ли перезапускать интерфейсы. |
 | `pfSense/etc/context.d/modules/reload-iface.sh` | Выполняет `rc.reload_all`, `restartallwan` и переключает `pfctl` в требуемое состояние. |
 | `pfSense/etc/context.d/modules/pfctl_off` | Скрипт для cron: отключает pfctl по PID-файлу `/var/run/pfctlcontext.pid`. |
@@ -37,7 +37,7 @@
    - После применения правок вызывает `modules/sync-conf.sh`, который сравнивает рабочую копию `config.xml` с оригиналом и записывает изменения только при наличии дельты.
 4. **Модуль BGP.** Запускается из `ContextOnly` и выполняет полную цепочку проверки зависимостей FRR, подгрузки `context.sh` при необходимости, генерации `config.xml` через PHP и применения настроек в рантайме через `vtysh`. Для предотвращения избыточных изменений хранит контрольные суммы и состояния сетей/соседей в `/var/run/context-bgp.*`.
 5. **IPsec-модуль (`modules/ipsec.sh`).** При `CONTEXT_IPSEC_ENABLE=YES` читает параметры туннелей, задаёт дефолты Phase1/Phase2 для каждого индекса, идемпотентно создаёт или обновляет секции `phase1/phase2` в `config.xml`, вызывает `ipsec_configure()`, контролирует strongSwan и инициирует подключения через `swanctl`. Встроенные плагины `ipsec-plugins/firewall-rules.sh` и `ipsec-plugins/strat-nonblok.sh` автоматически создают IKE/NAT-T/ESP правила на нужных интерфейсах и немедленно запускают `swanctl --initiate` в неблокирующем режиме.
-6. **Модуль NAT (`modules/nat.sh`).** При `NAT_ENABLE=YES` проверяет наличие интерфейса из `NAT_IF`, выставляет режим outbound NAT (automatic/hybrid/advanced/disabled) и при гибридном/advanced-режиме пересобирает набор правил для сетей `NAT_SRC`, затем вызывает `filter_configure()`.
+6. **Модуль NAT (`modules/nat.sh`).** При `NAT_ENABLE=YES` проверяет наличие интерфейса из `NAT_IF`, выставляет режим outbound NAT (automatic/hybrid/advanced/disabled), фиксирует результат в `config.xml`.
 7. **Перезапуски служб и состояние pfctl (`modules/pfctl.sh`, `modules/reload-iface.sh`, `modules/pfctl_off`).** `pfctl.sh` управляет WAN-параметрами (удаляет дефолтный маршрут при включённом BGP, переключает `blockpriv/bogons`, считает хэш секции `<interfaces>`), а `reload-iface.sh` реагирует на флаги `RC_RELOAD_IFACE` и `PFCTL`: вызывает `rc.reload_all`/`restartallwan`, включает или отключает pfctl и при необходимости создаёт PID-файл `/var/run/pfctlcontext.pid`. Cron-задача `modules/pfctl_off` каждую минуту проверяет этот PID-файл и держит pfctl отключённым до завершения инициализации.
 8. **Модуль управления management-интерфейсом (`modules/mgmt.sh`).** Активируется, когда в `context.sh` выставлено `MGMT_ENABLE=YES`: переводит выбранный логический интерфейс `MGMT_IF` в режим управляемого доступа, отключает anti-lockout веб-интерфейса, удаляет gateway, синхронизирует алиас `MGMT_PORTS`, строит ACL `[MGMT]` согласно источникам из `MGMT_SRC` и добавляет блокирующее правило `block any→mgmtIP` на задействованных интерфейсах. При `MGMT_ENABLE=NO` выполняет обратные операции и возвращает конфигурацию в исходное состояние.
 9. **ResizeZfs.** Может запускаться как на старте, так и при событиях `devd`; расширяет ZFS-раздел и пул `pfSense`, если обнаружено свободное место и нет повреждений GPT.
@@ -81,8 +81,9 @@
 ### NAT (outbound)
 - `NAT_ENABLE` — включает применение `modules/nat.sh` (значение `YES`).
 - `NAT_IF` — логическое имя внешнего интерфейса pfSense, через который выполняется NAT (например, `wan`).
-- `NAT_MODE` — режим outbound NAT (`automatic`, `hybrid`, `advanced`, `disabled`).
 - `NAT_SRC` — перечень локальных сетей (через пробел) для генерации правил в hybrid/advanced-режимах; не используйте `0.0.0.0/0`, чтобы не ломать выход в интернет.
+- `NAT_MODE` — режим outbound NAT (`automatic`, `hybrid`, `manual`, `disabled`).
+- `FW_IF` — интерфейс, на котором автоматически создаётся правило firewall «allow any → NOT <IP интерфейса>»; по умолчанию `opt1`.
 
 ### Управление management-интерфейсом
 - `MGMT_ENABLE` — включает (YES) или отключает (NO) применение модуля `mgmt.sh` для выбранного интерфейса.
@@ -99,7 +100,6 @@
 - Модуль пересоздаёт конфигурацию только при изменениях и после обновления вызывает `ipsec_configure()` и `swanctl --initiate`, поэтому контекст можно безопасно запускать повторно для проверки актуальности настроек.
 
 ### Автоматизация перезапусков
-- `RC_RELOAD_ALL` — полный перезапуск служб после применения `config.xml`.
 - `RC_RELOAD_IFACE` — перезапуск WAN-интерфейсов без полного рестарта.
 
 ### BGP и FRR
@@ -110,7 +110,6 @@
 - `BGP_RMAP_DEFAULT` — route-map по умолчанию для соседей и сетей.
 - `BGP_ADJACENCY_LOG` — включает логирование сессий в FRR.
 - `BGP_REDIST_CONNECTED` / `BGP_REDIST_STATIC` / `BGP_REDIST_KERNEL` — контроль перераспределения маршрутов.
-- `FRR_ENABLE` — общий флаг включения пакета FRR в pfSense.
 - `FRR_DEFAULT_ROUTER_ID` — router-id FRR при отсутствии BGP-настроек.
 - `FRR_MASTER_PASSWORD` — пароль vtysh, можно использовать совместно с `FRR_PASSWORD_ENCRYPT` (`on` — хранить в зашифрованном виде).
 
@@ -151,6 +150,7 @@ NAT_ENABLE="YES"
 NAT_MODE="hybrid"
 NAT_IF="wan"
 NAT_SRC="192.168.10.0/24 192.168.201.0/24"
+FW_IF="opt1"
 
 # MGMT
 MGMT_ENABLE="YES"
