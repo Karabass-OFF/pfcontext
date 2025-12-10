@@ -1,23 +1,23 @@
-1. Настройте сетевой доступ к pfSense и включите SSH (System ➜ Advanced ➜ Enable Secure Shell).
-2. Через веб-интерфейс http://host выполните проверку обновлений и установите критические патчи, если они доступны.
-3. Скопируйте содержимое текущей директории `pfSense` на удалённый хост в корень:
+1. Configure network access to pfSense and enable SSH (System ➜ Advanced ➜ Enable Secure Shell).
+2. Via the web interface http://host check for updates and install critical patches if available.
+3. Copy the contents of the current `pfSense` directory to the remote host root:
    ```sh
    scp -r ./etc root@host:/etc
    ```
-4.  Подключитесь к удалённому хосту под `root` и установите обязательные пакеты (редактор `vim` по желанию):
+4. Connect to the remote host as `root` and install the required packages (editor `vim` optional):
    ```sh
-    ssh user@host 
-    pkg install -y xmlstarlet
-    pkg install -y vim
-    set PKG = `pkg search -x frr |  awk '/pfSense/{print $1}'`
-    echo y | pkg install "$PKG"
-    ```
-5. Очистите логи и резервные копии:
-    ```sh
-    ssh user@host "find /var/log -type f -exec rm -f {} +"
+   ssh user@host
+   pkg install -y xmlstarlet
+   pkg install -y vim
+   set PKG = `pkg search -x frr | awk '/pfSense/{print $1}'`
+   echo y | pkg install "$PKG"
+   ```
+5. Clear logs and backups:
+   ```sh
+   ssh user@host "find /var/log -type f -exec rm -f {} +"
    ssh user@host "rm -f /cf/conf/backup/*"
-    ```
-6. Перезагрузите pfSense, чтобы запустился новый цикл инициализации:
+   ```
+6. Reboot pfSense to start the new initialization cycle:
    ```sh
    ssh user@host 'reboot'
    ```

@@ -21,7 +21,7 @@ function ctx_log(string $m): void {
   file_put_contents('/var/log/context.log', date('c')." [context-IPSEC][fw] $m\n", FILE_APPEND);
 }
 
-/* Получить адрес интерфейса для destination; иначе (self) */
+/* Get the interface address for destination; otherwise use (self) */
 function iface_dst_ip_or_self(string $iface): array {
   $ip = get_interface_ip($iface) ?: '';
   if ($ip !== '') return ['address' => $ip];
@@ -30,12 +30,12 @@ function iface_dst_ip_or_self(string $iface): array {
 
 global $config;
 
-/* Гарантируем массив правил */
+/* Ensure the rules array exists */
 if (!isset($config['filter']['rule']) || !is_array($config['filter']['rule'])) {
   $config['filter']['rule'] = [];
 }
 
-/* Поиск правила по iface+descr */
+/* Find rule by iface+descr */
 $find_rule = function(string $iface, string $descr): ?int {
   global $config;
   foreach ($config['filter']['rule'] as $i => $r) {
@@ -44,7 +44,7 @@ $find_rule = function(string $iface, string $descr): ?int {
   return null;
 };
 
-/* --- 1) IKE/NAT-T/ESP на интерфейсах Phase1 --- */
+/* --- 1) IKE / NAT-T / ESP on Phase1 interfaces --- */
 foreach (($config['ipsec']['phase1'] ?? []) as $p1) {
   $iface  = $p1['interface'] ?? 'wan';
   $remote = trim((string)($p1['remote-gateway'] ?? ''));
@@ -96,9 +96,9 @@ foreach (($config['ipsec']['phase1'] ?? []) as $p1) {
   }
 }
 
-/* --- 2) Универсальное правило "разрешить всё" на IPsec-интерфейсе --- */
+/* --- 2) Universal "allow-all" rule on the IPsec interface --- */
 
-// IPsec в pfSense — виртуальный интерфейс enc0 (если VTI не назначен)
+// IPsec in pfSense is the virtual interface enc0 (unless a VTI is assigned)
 $ipsec_if = array_key_exists('ipsec', $config['interfaces'] ?? []) ? 'ipsec' : 'enc0';
 
 $descr_v4 = '[context] IPsec allow all traffic (IPv4)';
@@ -155,7 +155,7 @@ if ($idx_v6 !== null) {
 }
 
 
-/* --- 3) Сохранить и применить --- */
+/* --- 3) Save and apply --- */
 write_config('[context-IPSEC] Applied firewall rules (no-alias)', false);
 try {
   filter_configure_sync();

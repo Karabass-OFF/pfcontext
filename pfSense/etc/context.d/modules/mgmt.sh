@@ -5,14 +5,15 @@
 # -------------------------------------------------------------------
 # Context vars:
 #   MGMT_ENABLE=YES|NO
-#   MGMT_IF=lan|wan|optN         # Где расположен управляемый IP (назначение)
-#   MGMT_PORT=22,443,80,8443     # Порты GUI/SSH и т.п.
-#   MGMT_SRC=...                 # ОТКУДА пускать. Форматы:
+#   MGMT_IF=lan|wan|optN         # Where the management IP is located (destination)
+#   MGMT_PORT=22,443,80,8443     # GUI/SSH ports etc.
+#   MGMT_SRC=...                 # Allowed source. Formats:
 #       - lan|wan|ipsec
 #       - CIDR (10.11.11.0/24, 203.0.113.5/32)
-#       - iface:CIDR|net|any  (напр. wan:10.11.11.0/24, lan:net, wan:any)
-#   MGMT_SRC_DEFAULT_IF=lan    # если MGMT_SRC содержит «голый» CIDR без iface
+#       - iface:CIDR|net|any  (e.g. wan:10.11.11.0/24, lan:net, wan:any)
+#   MGMT_SRC_DEFAULT_IF=lan      # used if MGMT_SRC contains a bare CIDR without iface
 # -------------------------------------------------------------------
+
 : "${MGMT_ENABLE:=YES}"
 : "${MGMT_IF:=lan}"
 : "${MGMT_PORT:=22,80,443}"
@@ -38,8 +39,7 @@ log "Starting Management Interface Context, IF=${MGMT_IF}, ENABLE=${MGMT_ENABLE}
 CONF_PATH="$(/usr/local/bin/php -r "require_once(\"config.inc\"); global \$g; echo (\$g[\"conf_path\"] ?? \"/conf\");" 2>/dev/null)"
 [ -z "$CONF_PATH" ] && CONF_PATH="/conf"
 log "Detected conf path: ${CONF_PATH}/config.xml"
-
-# ---- resolve real if (для справки в логах; для правил достаточно логического имени) ----
+# ---- resolve the real interface (for log reference; logical name is enough for rules) ----
 REAL_IF=$(/usr/local/bin/php -r "
 require_once('interfaces.inc');
 \$real = get_real_interface('${MGMT_IF}');
@@ -83,7 +83,7 @@ filter_configure();
 if [ "$MGMT_ENABLE" = "YES" ]; then
   log "=== Enabling management interface $MGMT_IF ==="
 
-  # 1) отключить anti-lockout
+# 1) disable anti-lockout
   log "Disabling webConfigurator anti-lockout rule (set noantilockout=yes)"
   apply_php "
     require_once('config.inc');
@@ -93,7 +93,7 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
     write_config('[MGMT] Disable anti-lockout (set yes)');
   "
 
-  # 2) убрать gateway на MGMT_IF
+# 2) remove the gateway from MGMT_IF
   log "Removing gateway from $MGMT_IF"
   apply_php "
     require_once('config.inc');
@@ -124,7 +124,7 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
       function(\$a){ return !is_array(\$a) || (\$a['name'] ?? '') !== 'MGMT_PORTS'; }
     ));
 
-    // Добавить заново
+    // Add it again
     \$config['aliases']['alias'][] = [
       'name'=>\$alias,
       'type'=>'port',
@@ -135,8 +135,8 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
     write_config('[MGMT] Updated alias MGMT_PORTS');
     mark_subsystem_dirty('aliases');
   "
-
-  # 4) правила FW по источникам MGMT_SRC (+ per-iface BLOCK any→mgmtIP)
+  
+  # 4) FW rules based on MGMT_SRC (+ per-interface BLOCK any→mgmtIP)
   log "Adding [MGMT] firewall rules from sources: ${MGMT_SRC}"
   apply_php "
     require_once('config.inc');
@@ -149,23 +149,23 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
     \$srcSpec  = getenv('MGMT_SRC') ?: 'lan';
     \$defIf    = getenv('MGMT_SRC_DEFAULT_IF') ?: 'ipsec';
 
-    // удалить старые [MGMT]-правила и дефолтные allow LAN/WAN
+    // remove old [MGMT] rules and default allow LAN/WAN rules
     \$config['filter']['rule'] = array_values(array_filter(\$config['filter']['rule'] ?? [], function(\$r) use (\$mgmtIf) {
-    // если нет descr — оставляем
+    // if there is no description — keep it
     if (!isset(\$r['descr'])) return true;
 
     \$descr = strtolower(\$r['descr']);
-    // удалить все [MGMT] и default allow на том же интерфейсе
+    // remove all [MGMT] rules and default allow rules on the same interface
     if (strpos(\$descr, '[mgmt]') !== false) return false;
     if (strpos(\$descr, 'default allow') !== false && (\$r['interface'] ?? '') === \$mgmtIf) return false;
     if (strpos(\$descr, 'anti-lockout') !== false && (\$r['interface'] ?? '') === \$mgmtIf) return false;
     return true;
 }));
 
-    // разобрать MGMT_SRC
+    // parse MGMT_SRC
     \$entries   = array_filter(array_map('trim', explode(',', \$srcSpec)));
     \$rules     = [];
-    \$ifUsedMap = [];  // интерфейсы, на которых будем ставить итоговый BLOCK any→mgmtIP
+    \$ifUsedMap = []; // interfaces on which the final BLOCK any→mgmtIP rule will be applied
 
     foreach (\$entries as \$e) {
       \$iface = '';
@@ -177,7 +177,7 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
         if (in_array(\$e, ['lan','wan','ipsec'])) {
           \$iface = \$e; \$net = 'net';
         } else {
-          // голый CIDR/хост — повесим на MGMT_SRC_DEFAULT_IF
+          // bare CIDR/host — attach it to MGMT_SRC_DEFAULT_IF
           \$iface = \$defIf; \$net = \$e;
         }
       }
@@ -193,13 +193,13 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
         \$src = ['address' => \$net];         // CIDR/host/alias
       }
 
-      // allow ICMP (ping) на интерфейсе-источнике
+      // allow ICMP (ping) on the source interface
       \$rules[] = [
         'type'=>'pass','interface'=>\$iface,'ipprotocol'=>'inet','protocol'=>'icmp',
         'source'=>\$src,'destination'=>['address'=>\$mgmtIp],
         'descr'=>sprintf('[MGMT] Allow ICMP to %s from %s:%s', \$mgmtIp, \$iface, \$net)
       ];
-      // allow TCP mgmt ports на интерфейсе-источнике
+      // allow TCP management ports on the source interface
       \$rules[] = [
         'type'=>'pass','interface'=>\$iface,'ipprotocol'=>'inet','protocol'=>'tcp',
         'source'=>\$src,'destination'=>['address'=>\$mgmtIp,'port'=>'MGMT_PORTS'],
@@ -207,7 +207,7 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
       ];
     }
 
-    // Итоговый BLOCK: на каждом задействованном интерфейсе — блокировать ЛЮБОЙ источник к mgmt IP
+    // Final BLOCK: on each involved interface — block ANY source from reaching the mgmt IP
     foreach (array_keys(\$ifUsedMap) as \$iface) {
       \$rules[] = [
         'type'=>'block','interface'=>\$iface,'ipprotocol'=>'inet', /* protocol=any */
@@ -217,13 +217,13 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
       ];
     }
 
-    // Добавить все правила в конфиг (без включения лога)
+   // Add all rules to the config (without enabling logging)
     foreach (\$rules as \$r) { \$config['filter']['rule'][] = \$r; }
 
     write_config('[MGMT] Added management firewall rules (per-iface block any→mgmtIP)');
   "
 
-  # 5) применить конфиг
+# 5) apply the config
   log "Applying aliases + filter"
   apply_php "${php_apply_aliases_and_filter}"
 
@@ -232,7 +232,7 @@ if [ "$MGMT_ENABLE" = "YES" ]; then
 else
   log "=== Disabling management interface $MGMT_IF ==="
 
-  # 1) вернуть anti-lockout
+  # 1) restore anti-lockout
   log "Re-enabling webConfigurator anti-lockout rule (remove noantilockout)"
   apply_php "
     require_once('config.inc');
@@ -243,7 +243,7 @@ else
     }
   "
 
-  # 2) удалить [MGMT]-правила
+# 2) remove [MGMT] rules
   log "Removing [MGMT] firewall rules"
   apply_php "
     require_once('config.inc'); require_once('filter.inc');
@@ -272,18 +272,19 @@ else
     }
   "
 
-  # 4) убрать gateway на MGMT_IF (на всякий)
-  log "Removing gateway from $MGMT_IF"
-  apply_php "
-    require_once('config.inc'); require_once('interfaces.inc'); require_once('system.inc');
-    global \$config; \$if='${MGMT_IF}';
-    if (isset(\$config['interfaces'][\$if]['gateway'])) {
-      unset(\$config['interfaces'][\$if]['gateway']);
-      write_config('[MGMT] Remove gateway from '.\$if);
-      system_routing_configure();
-    }
-  "
-  # 5) применить
+  # 4) remove the gateway from MGMT_IF (just in case)
+  #log "Removing gateway from $MGMT_IF"
+  #apply_php "
+  #  require_once('config.inc'); require_once('interfaces.inc'); require_once('system.inc');
+  #  global \$config; \$if='${MGMT_IF}';
+  #  if (isset(\$config['interfaces'][\$if]['gateway'])) {
+  #    unset(\$config['interfaces'][\$if]['gateway']);
+  #    write_config('[MGMT] Remove gateway from '.\$if);
+  #    system_routing_configure();
+  #  }
+  #"
+  
+  # 5) apply
   log "Applying aliases + filter"
   apply_php "${php_apply_aliases_and_filter}"
 

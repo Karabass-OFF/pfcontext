@@ -1,5 +1,5 @@
 # shellcheck disable=SC1091,SC2148,SC2154
-# Перезагрузка служб pfSense (если указано в контексте)
+# Reload pfSense services (if specified in the context)
 if [ "${RC_RELOAD_ALL}" = "YES" ]; then
     # Перезагружаем службы pfSense
    {    /etc/rc.reload_all start
@@ -9,19 +9,22 @@ if [ "${RC_RELOAD_ALL}" = "YES" ]; then
     } >>"$LOG" 2>&1
 fi
 echo "$(date) [context:reload-iface.sh] RC_RELOAD_IFACE=${RC_RELOAD_IFACE}" >> "$LOG"
-# Перезагрузка интерфейсов pfSense (если указано в контексте)
+
+# Reload pfSense interfaces (if specified in the context)
 if [ "${RC_RELOAD_IFACE}" = "YES" ]; then
     echo "$(date) [context:reload-iface.sh]  ${RC_RELOAD_IFACE} or PID file detected $PID" 
-    # Перезагружаем интерфейсы pfSense
+    ChatGPT сказал:
+
+# Reload pfSense interfaces
     {   pfSsh.php playback restartallwan
         echo "$(date) [context:reload-iface.sh] pfSense services restarted"
     } >>"$LOG" 2>&1
 fi
 
-# отключение/включение pfSense firewall (pfctl) 
+# disable/enable the pfSense firewall (pfctl)
 echo "$(date) [context:reload-iface.sh] pfSense firewall switch = ${PFCTL}" >> "$LOG"
-if [ -n "${PFCTL:-}" ]; then # если переменная PFCTL указана
-    # Приводим значение к нижнему регистру для удобства сравнения   
+if [ -n "${PFCTL:-}" ]; then 
+# Convert the value to lowercase for easier comparison  
     _lc_pfctl=$(echo "${PFCTL}" | tr '[:upper:]' '[:lower:]')
     case "$_lc_pfctl" in
         no|0)

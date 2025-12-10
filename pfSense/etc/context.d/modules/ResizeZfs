@@ -1,13 +1,13 @@
 #!/bin/sh
-# ResizeFs — универсальный ресайз диска для pfSense (UFS/ZFS)
-# Теперь корректно определяет последний freebsd-* раздел (корень)
+# ResizeFs — universal disk resize tool for pfSense (UFS/ZFS)
+# Now correctly detects the last freebsd-* partition (the root)
 
 LOG="/var/log/context.log"
 {
   echo "$(date) [context] === START ResizeFs  ==="
 
   DISK=$(gpart show | awk '/GPT/ {print $4; exit}')
-  [ -z "$DISK" ] && { echo "$(date) [context] Не удалось определить диск — выходим"; exit 1; }
+  [ -z "$DISK" ] && { echo "$(date) [context] Failed to determine the disk — exiting"; exit 1; }
 
   # Определяем тип раздела (берём последний freebsd-* — корневой)
   FS_TYPE=$(gpart show "$DISK" | awk '/freebsd-/ {last=$4} END{print last}')
@@ -16,37 +16,37 @@ LOG="/var/log/context.log"
     freebsd-zfs|zfs)
       echo "$(date) [context] Detected filesystem: ZFS"
       ZFS_PART_NUM=$(gpart show "$DISK" | awk '/freebsd-zfs/ {n=$3} END{print n}')
-      [ -z "$ZFS_PART_NUM" ] && { echo "$(date) [context] ZFS-раздел не найден — выходим"; exit 0; }
+      [ -z "$ZFS_PART_NUM" ] && { echo "$(date) [context] ZFS partition not found — exiting"; exit 0; }
 
       POOL=$(zpool list -H -o name 2>/dev/null | head -n1)
-      [ -z "$POOL" ] && { echo "$(date) [context] ZFS-пул не найден — выходим"; exit 0; }
+      [ -z "$POOL" ] && { echo "$(date) [context] ZFS pool not found — exiting"; exit 0; }
 
       ZFS_DEV="${DISK}p${ZFS_PART_NUM}"
 
-      echo "$(date) [context] Расширяем ZFS-пул $POOL на устройстве $ZFS_DEV"
+      echo "$(date) [context] Expanding ZFS pool $POOL on the device $ZFS_DEV"
       gpart recover "$DISK" >/dev/null 2>&1
       gpart resize -i "$ZFS_PART_NUM" "$DISK" >/dev/null 2>&1
       zpool online -e "$POOL" "$ZFS_DEV" >/dev/null 2>&1
       zpool list "$POOL"
-      echo "$(date) [context] ZFS-пул $POOL успешно расширен"
+      echo "$(date) [context] ZFS-пул $POOL successfully expanded"
       ;;
 
     freebsd-ufs|ufs)
       echo "$(date) [context] Detected filesystem: UFS"
       UFS_PART_NUM=$(gpart show "$DISK" | awk '/freebsd-ufs/ {n=$3} END{print n}')
-      [ -z "$UFS_PART_NUM" ] && { echo "$(date) [context] UFS-раздел не найден — выходим"; exit 0; }
+      [ -z "$UFS_PART_NUM" ] && { echo "$(date) [context] UFS partition not found — exiting"; exit 0; }
 
       UFS_DEV="${DISK}p${UFS_PART_NUM}"
 
-      echo "$(date) [context] Расширяем UFS-раздел $UFS_DEV"
+      echo "$(date) [context] Expanding UFS partition $UFS_DEV"
       gpart recover "$DISK" >/dev/null 2>&1
       gpart resize -i "$UFS_PART_NUM" "$DISK" >/dev/null 2>&1
       growfs -y "/dev/$UFS_DEV" >/dev/null 2>&1
-      echo "$(date) [context] UFS-раздел $UFS_DEV успешно расширен"
+      echo "$(date) [context] UFS partition $UFS_DEV successfully expanded"
       ;;
 
     *)
-      echo "$(date) [context] Неизвестная ФС ($FS_TYPE) — пропускаем ResizeFs"
+      echo "$(date) [context] Unknown filesystem ($FS_TYPE) — skipping ResizeFs"
       ;;
   esac
 

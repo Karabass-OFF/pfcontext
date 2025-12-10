@@ -1,16 +1,17 @@
 # shellcheck shell=sh disable=SC2034,SC2154
 
-# Если BGP включен, удаляем маршрут по умолчанию, чтобы BGP управлял маршрутом самостоятельно
-# BGP_ENABLE=YES|NO (по умолчанию NO)
-if [ "${BGP_ENABLE}" = "YES" ] ; then # Если BGP включен, то удаляем маршрут
+# If BGP is enabled, remove the default route so BGP can manage routing on its own
+# BGP_ENABLE=YES|NO (default is NO)
+if [ "${BGP_ENABLE}" = "YES" ] ; then # If BGP is enabled, then remove the route
     echo "$(date) [context:pfctl.sh] BGP is enabled, removing default route: $WAN_GATEWAY because BGP will manage it" >> "$LOG"
     route delete default >/dev/null 2>&1
-    # Удаляем старый шлюз из config.xml, если он есть
+   ChatGPT сказал:
+    # Remove the old gateway from config.xml, if it exists
     xml ed -L -d "//gateways/gateway_item[name='WANGW']" "$backup_xml_file"
     xml ed -L -d "//interfaces//gateway[text()='WANGW']" "$backup_xml_file"
     xml ed -L -d "//gateways/defaultgw4[text()='WANGW']" "$backup_xml_file"
 fi
-# Отключаем/Включаем private networks для WAN
+# Disable/Enable private networks for WAN
 if [ -n "$BLOCK_PRIVATE_NETWORKS" ] && [ "$BLOCK_PRIVATE_NETWORKS" = "YES" ]; then
      xml ed -L \
         -s "//interfaces/$network" -t elem -n "blockpriv" -v "" \
@@ -22,7 +23,7 @@ else
         "$backup_xml_file"
     echo "$(date) [context:pfctl.sh] No BLOCK_PRIVATE_NETWORKS ($BLOCK_PRIVATE_NETWORKS)" >> "$LOG"
 fi
-# Отключаем/Включаем bogon networks для WAN
+# Disable/Enable bogon networks for WAN
 if [ -n "$BLOCK_BOGON_NETWORKS" ] && [ "$BLOCK_BOGON_NETWORKS" = "YES" ]; then
     xml ed -L \
         -s "//interfaces/$network" -t elem -n "blockbogons" -v "" \
@@ -35,7 +36,7 @@ else
     echo "$(date) [context:pfctl.sh] No BLOCK_BOGON_NETWORKS ($BLOCK_BOGON_NETWORKS)" >> "$LOG"
 fi
 
-# Если есть изменения в секции interfaces, ставим флаг на перезагрузку интерфейсов
+# If there are changes in the interfaces section, set the flag to reload interfaces
 # RC_RELOAD_IFACE=YES|NO 
 hash1="$(xml sel -t -c "//interfaces" "$xml_file" | xml fo -n -o | tr -d '\n' | md5)"
 hash2="$(xml sel -t -c "//interfaces" "$backup_xml_file" | xml fo -n -o | tr -d '\n' | md5)"

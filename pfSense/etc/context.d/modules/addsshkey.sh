@@ -1,9 +1,9 @@
 # shellcheck shell=sh disable=SC2034,SC2154
-# SSH ключ (если указана переменная SSH_PUBLIC_KEY)
+# SSH key (if the SSH_PUBLIC_KEY variable is specified)
 if [ -n "${SSH_PUBLIC_KEY:-}" ]; then
     mkdir -p /root/.ssh
     if [ ! -f /root/.ssh/authorized_keys ] || ! grep -Fxq "$SSH_PUBLIC_KEY" /root/.ssh/authorized_keys; then
-        # кодируем ключ в base64 (без переносов строк)
+        # encode the key in base64 (without line breaks)
         # pfSense stores SSH authorized keys in base64 format inside <authorizedkeys>
         # This ensures compatibility with pfSense GUI and PHP auth subsystem.
         ENC_KEY=$(printf '%s' "$SSH_PUBLIC_KEY" | base64 | tr -d '\n')
